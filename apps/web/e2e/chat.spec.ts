@@ -10,6 +10,20 @@ async function register(page: Page) {
   await page.getByLabel("Password").fill("password123");
   await page.getByRole("button", { name: "Sign up" }).click();
   await expect(page.getByText("How can I help you today?")).toBeVisible();
+
+  // Without a server-wide key the settings dialog opens automatically: save the user's key.
+  const settings = page.getByRole("dialog", { name: "Settings" });
+  const needsKey = await settings
+    .waitFor({ timeout: 3_000 })
+    .then(() => true)
+    .catch(() => false);
+  if (needsKey) {
+    await settings.getByLabel("DeepSeek API key").fill(process.env.DEEPSEEK_API_KEY!);
+    await settings.getByRole("button", { name: "Save" }).click();
+    await expect(page.getByText("API key saved")).toBeVisible();
+    await expect(settings.getByText(/Current key: sk-/)).toBeVisible();
+    await page.keyboard.press("Escape");
+  }
 }
 
 test("redirects anonymous users to login", async ({ page }) => {
@@ -53,4 +67,19 @@ test("chat, fork, archive", async ({ page }) => {
   await expect(page.getByText("Chat archived")).toBeVisible();
   await expect(item).toHaveCount(0);
   await page.screenshot({ path: "test-results/04-archived.png" });
+});
+
+test("runs code in the sandbox", async ({ page }) => {
+  test.skip(!hasKey, "DEEPSEEK_API_KEY not set");
+  await register(page);
+  const composer = page.getByPlaceholder("Ask MiniBot anything…");
+  await composer.fill("Use the bash tool to run `echo minibot-$((6*7))` and tell me the output.");
+  await composer.press("Enter");
+
+  const assistant = page.locator("[data-role='assistant']").last();
+  await expect(assistant.getByRole("button", { name: /Ran command/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Send" })).toBeVisible();
+  await expect(assistant).toContainText("minibot-42");
+  await assistant.getByRole("button", { name: /Ran command/ }).click();
+  await page.screenshot({ path: "test-results/05-sandbox.png" });
 });
