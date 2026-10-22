@@ -1,0 +1,84 @@
+# Local deployment of MiniBot:
+#   cp .env.example .env   # fill in secrets
+#   docker compose up -d --build
+name: minibot
+
+services:
+  db:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: minibot
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-minibot}
+      POSTGRES_DB: minibot
+    volumes:
+      - pgdata:/var/lib/postgresql
+    ports:
+      - "127.0.0.1:5432:5432" # exposed locally for `pnpm dev` / drizzle studio
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U minibot -d minibot"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Applies Drizzle migrations, then exits.
+  migrate:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      target: migrator
+    environment:
+      DATABASE_URL: postgres://minibot:${POSTGRES_PASSWORD:-minibot}@db:5432/minibot
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  # Restricted Docker API: the web app may manage containers/exec/images but
+  # never gets the raw (root-equivalent) Docker socket.
+  docker-proxy:
+    image: tecnativa/docker-socket-proxy:v0.4.1
+    restart: unless-stopped
+    environment:
+      CONTAINERS: 1
+      EXEC: 1
+      IMAGES: 1
+      POST: 1
+      ALLOW_START: 1
+      ALLOW_STOP: 1
+      INFO: 1
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+  # Builds the image used for per-conversation sandboxes (does not run).
+  sandbox-image:
+    build: docker/sandbox
+    image: minibot-sandbox:latest
+    entrypoint: ["true"]
+    restart: "no"
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      target: runner
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://minibot:${POSTGRES_PASSWORD:-minibot}@db:5432/minibot
+      DOCKER_HOST: tcp://docker-proxy:2375
+      BETTER_AUTH_URL: ${BETTER_AUTH_URL:-http://localhost:3000}
+    ports:
+      - "3000:3000"
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      docker-proxy:
+        condition: service_started
+      sandbox-image:
+        condition: service_completed_successfully
+
+volumes:
+  pgdata:
