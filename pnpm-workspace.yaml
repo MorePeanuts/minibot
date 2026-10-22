@@ -1,0 +1,24 @@
+packages:
+  - apps/*
+  - packages/*
+
+# pnpm 10+ blocks dependency lifecycle scripts by default (supply-chain hardening).
+# Only explicitly approved packages may run install scripts.
+allowBuilds:
+  "@google/genai": false
+  cpu-features: false
+  esbuild: true
+  protobufjs: false
+  ssh2: false
+  unrs-resolver: false
+
+# pnpm 11 refuses packages younger than `minimumReleaseAge`; pi ships very frequently,
+# so we pin exact versions and allow-list them explicitly.
+minimumReleaseAgeExclude:
+  - "@earendil-works/pi-agent-core@1.4.0"
+  - "@earendil-works/pi-ai@1.4.0"
+  - "@earendil-works/pi-telemetry@1.4.0"
+  - "@earendil-works/pi-codemode@1.4.0"
+  - "@earendil-works/pi-coding-agent@1.4.0"
+  - "@earendil-works/pi-mcp@1.4.0"
+  - "@earendil-works/pi-tui@1.4.0"

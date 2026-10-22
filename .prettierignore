@@ -1,0 +1,6 @@
+pnpm-lock.yaml
+packages/db/drizzle/
+apps/web/src/components/ui/
+.next/
+dist/
+coverage/
