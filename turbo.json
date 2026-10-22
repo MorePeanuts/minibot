@@ -13,7 +13,8 @@
         "ENCRYPTION_KEY",
         "DEEPSEEK_*",
         "SANDBOX_*",
-        "DOCKER_HOST"
+        "DOCKER_HOST",
+        "SKIP_ENV_VALIDATION"
       ]
     },
     "dev": {
