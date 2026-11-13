@@ -40,7 +40,11 @@ export function withFileReferences(
   files: ChatAttachment[],
 ): FileUserMessage {
   return files.length
-    ? { ...user, providerFileIds: files.map((file) => file.providerFileId) }
+    ? {
+        ...user,
+        providerFileIds: files.map((file) => file.providerFileId),
+        localAttachments: files.map(({ id, filename }) => ({ id, filename })),
+      }
     : user;
 }
 

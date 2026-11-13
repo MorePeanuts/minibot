@@ -1,40 +1,69 @@
+import { randomUUID } from "node:crypto";
 import type { TranscriptContext, UserMessage } from "@earendil-works/pi-ai";
 
 /** Local metadata on the user turn, serialized to native DeepSeek content blocks. */
-export type FileUserMessage = UserMessage & { providerFileIds?: readonly string[] };
+export type FileUserMessage = UserMessage & {
+  providerFileIds?: readonly string[];
+  localAttachments?: readonly { id: string; filename: string }[];
+};
 
-export function addFileContent(payload: unknown, context: TranscriptContext) {
-  if (
-    !payload ||
-    typeof payload !== "object" ||
-    !("messages" in payload) ||
-    !Array.isArray(payload.messages)
-  ) {
-    throw new Error("Unexpected DeepSeek request format.");
-  }
-  const users = context.messages.filter(
-    (message): message is FileUserMessage => message.role === "user",
-  );
-  const userParams = (payload.messages as { role: string; content?: unknown }[]).filter(
-    (message) => message.role === "user",
-  );
-  if (users.length !== userParams.length)
-    throw new Error("Could not match DeepSeek file references to user turns.");
-  for (const [index, user] of users.entries()) {
-    if (!user.providerFileIds?.length) continue;
-    const param = userParams[index]!;
-    const blocks =
-      typeof param.content === "string"
-        ? param.content
-          ? [{ type: "text", text: param.content }]
+function hasFiles(message: TranscriptContext["messages"][number]): message is FileUserMessage {
+  return message.role === "user" && Boolean((message as FileUserMessage).providerFileIds?.length);
+}
+
+export function prepareFileContent(context: TranscriptContext) {
+  const fileTurns = new Map<string, FileUserMessage>();
+  const messages = context.messages.map((message) => {
+    if (!hasFiles(message)) return message;
+    const marker = randomUUID();
+    fileTurns.set(marker, message);
+    const content =
+      typeof message.content === "string"
+        ? message.content
+          ? [{ type: "text" as const, text: message.content }]
           : []
-        : Array.isArray(param.content)
-          ? param.content
-          : [];
-    param.content = [
-      ...blocks,
-      ...user.providerFileIds.map((file_id) => ({ type: "file", file_id })),
-    ];
-  }
-  return payload;
+        : message.content;
+    return { ...message, content: [{ type: "text" as const, text: marker }, ...content] };
+  });
+
+  return {
+    context: fileTurns.size ? { ...context, messages } : context,
+    addToPayload(payload: unknown) {
+      if (
+        !payload ||
+        typeof payload !== "object" ||
+        !("messages" in payload) ||
+        !Array.isArray(payload.messages)
+      ) {
+        throw new Error("Unexpected DeepSeek request format.");
+      }
+      // Tool results with images can create extra provider-side user turns. Match the
+      // attachment to its actual user turn using a marker removed before serialization.
+      const matched = new Set<string>();
+      for (const param of payload.messages as { role: string; content?: unknown }[]) {
+        if (param.role !== "user" || !Array.isArray(param.content)) continue;
+        const [first, ...blocks] = param.content;
+        if (first?.type !== "text") continue;
+        const user = fileTurns.get(first.text);
+        if (!user) continue;
+        matched.add(first.text);
+        param.content = [
+          ...blocks,
+          ...(user.localAttachments?.length
+            ? [
+                {
+                  type: "text",
+                  text: `Uploaded attachments (internal IDs for sandbox tools): ${JSON.stringify(user.localAttachments)}`,
+                },
+              ]
+            : []),
+          ...user.providerFileIds!.map((file_id) => ({ type: "file", file_id })),
+        ];
+      }
+      if (matched.size !== fileTurns.size) {
+        throw new Error("Could not match DeepSeek file references to user turns.");
+      }
+      return payload;
+    },
+  };
 }

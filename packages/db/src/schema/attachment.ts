@@ -2,6 +2,7 @@ import {
   customType,
   index,
   integer,
+  jsonb,
   pgTable,
   primaryKey,
   text,
@@ -48,4 +49,18 @@ export const messageAttachment = pgTable(
     primaryKey({ columns: [t.messageId, t.attachmentId] }),
     index("message_attachment_file_idx").on(t.attachmentId),
   ],
+);
+
+export const attachmentOcr = pgTable(
+  "attachment_ocr",
+  {
+    attachmentId: uuid()
+      .notNull()
+      .references(() => attachment.id, { onDelete: "cascade" }),
+    purpose: text().notNull(),
+    pages: jsonb()
+      .$type<{ index: number; text: string; finish_reason: "stop" | "length" }[]>()
+      .notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.attachmentId, t.purpose] })],
 );

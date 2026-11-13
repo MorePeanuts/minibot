@@ -4,8 +4,9 @@
  */
 import { randomUUID } from "node:crypto";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
-import { Docker, SandboxManager } from "@minibot/sandbox";
+import { Docker, SandboxManager, workspaceDownloadPath } from "@minibot/sandbox";
 import { afterAll, describe, expect, it } from "vitest";
+import { createDocumentTools, createExportFileTool } from "./documents";
 import { createSandboxTools } from "./sandbox";
 
 const IMAGE = process.env.SANDBOX_IMAGE ?? "minibot-sandbox:latest";
@@ -56,6 +57,62 @@ describe.runIf(available)("sandbox tools (docker)", () => {
     expect(await run("ls", { path: "." })).toContain("src/");
     expect(await run("find", { pattern: "*.py" })).toContain("src/demo.py");
     expect(await run("grep", { pattern: "print" })).toContain("src/demo.py:1:");
+  }, 60_000);
+
+  it("copies originals, stages OCR, processes pages and exports a confined download surviving fork", async () => {
+    const sandbox = await manager.acquire(sessionId);
+    const getSandbox = async () => sandbox;
+    const [copy, ocr] = createDocumentTools(getSandbox, {
+      read: async (id) => ({ id, filename: "test.pdf", bytes: Buffer.from("original pdf") }),
+      recognize: async () => [
+        { index: 0, text: "entry", finish_reason: "stop" },
+        { index: 1, text: "partial", finish_reason: "length" },
+      ],
+    });
+    const attachmentId = randomUUID();
+    const original = await copy!.execute("copy", { attachmentId });
+    const raw = await ocr!.execute("ocr", { attachmentId });
+    expect(raw.content[0]).toMatchObject({
+      text: expect.stringContaining("1 page(s) were truncated"),
+    });
+    expect(original.content[0]).toMatchObject({
+      text: expect.stringContaining("/workspace/attachments/"),
+    });
+    await run("write", {
+      path: "extract.py",
+      content: [
+        "import csv, glob, json",
+        'with open(glob.glob("ocr/*.json")[0]) as source, open("results.csv", "w") as target:',
+        '    pages = json.load(source)["pages"]',
+        "    writer = csv.writer(target)",
+        '    writer.writerow(["page", "text"])',
+        '    writer.writerows((page["index"] + 1, page["text"]) for page in pages)',
+      ].join("\n"),
+    });
+    await run("bash", { command: "python3 extract.py" });
+    const exported = await createExportFileTool(getSandbox).execute("export", {
+      path: "results.csv",
+    });
+    const id = exported.details.download.id as string;
+    const snapshot = workspaceDownloadPath("/workspace", id);
+    await sandbox.writeFile("/workspace/results.csv", "updated later");
+    expect((await sandbox.readWorkspaceFile(snapshot, 1024)).toString()).toContain("1,entry");
+    await expect(sandbox.readWorkspaceFile(snapshot, 1)).rejects.toThrow(/download limit/);
+    await expect(sandbox.readWorkspaceFile("/etc/passwd", 1024)).rejects.toThrow(
+      /inside the workspace/,
+    );
+    await sandbox.exec("ln -sf /etc/passwd file-link && ln -sfn /etc dir-link && mkfifo pipe");
+    for (const path of ["file-link", "dir-link/passwd", "pipe", "./../etc/passwd"]) {
+      await expect(sandbox.readWorkspaceFile(path, 1024)).rejects.toThrow(/inside the workspace/);
+    }
+    const forkId = `test-${randomUUID()}`;
+    try {
+      await manager.copyWorkspace(sessionId, forkId);
+      const fork = await manager.acquire(forkId);
+      expect((await fork.readWorkspaceFile(snapshot, 1024)).toString()).toContain("2,partial");
+    } finally {
+      await manager.remove(forkId);
+    }
   }, 60_000);
 
   it("kills long running commands on timeout", async () => {

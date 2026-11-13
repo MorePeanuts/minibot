@@ -1,7 +1,8 @@
 import { Agent, type AgentMessage } from "@earendil-works/pi-agent-core";
-import { addFileContent, type FileUserMessage } from "./file-content";
+import { prepareFileContent } from "./file-content";
 import { models, resolveModel, resolveThinkingLevel } from "./models";
 import { buildSystemPrompt, SANDBOX_WORKDIR } from "./prompt";
+import { createDocumentTools, createExportFileTool, type DocumentAccess } from "./tools/documents";
 import { DeepSeekToolsClient } from "./tools/deepseek-search";
 import { createSandboxTools, type SandboxProvider } from "./tools/sandbox";
 import { createWebFetchTool, createWebSearchTool } from "./tools/web";
@@ -14,6 +15,7 @@ export interface CreateMiniBotAgentOptions {
   /** Prior conversation (user / assistant / toolResult messages). */
   history: AgentMessage[];
   getSandbox: SandboxProvider;
+  documents?: DocumentAccess;
   /** Forwarded to the provider for prompt-cache affinity. */
   sessionId?: string;
 }
@@ -32,20 +34,19 @@ export function createMiniBotAgent(options: CreateMiniBotAgentOptions): Agent {
         createWebSearchTool(deepseekTools),
         createWebFetchTool(deepseekTools),
         ...createSandboxTools(SANDBOX_WORKDIR, options.getSandbox),
+        ...(options.documents ? createDocumentTools(options.getSandbox, options.documents) : []),
+        createExportFileTool(options.getSandbox),
       ],
       messages: options.history,
     },
     streamFn: (model, context, streamOptions) => {
-      const hasFiles = context.messages.some(
-        (message) =>
-          message.role === "user" && (message as FileUserMessage).providerFileIds?.length,
-      );
-      if (!hasFiles) return models.streamSimple(model, context, streamOptions);
-      return models.streamSimple(model, context, {
+      const files = prepareFileContent(context);
+      if (files.context === context) return models.streamSimple(model, context, streamOptions);
+      return models.streamSimple(model, files.context, {
         ...streamOptions,
         onPayload: async (payload, providerModel) => {
           const original = await streamOptions?.onPayload?.(payload, providerModel);
-          return addFileContent(original ?? payload, context);
+          return files.addToPayload(original ?? payload);
         },
       });
     },

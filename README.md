@@ -110,6 +110,12 @@ pnpm dev                        # http://localhost:3000（热更新）
 
 含文档的对话自动使用 DeepSeek Flash，历史文件引用也会随请求发送。每次请求最多包含 20 份文档，DeepSeek 还限制解析后的文档总文本大小。更换 API Key 后，恢复上传时的 Key 即可继续原对话。Fork 会保留附件引用，删除最后一个引用后会移除本地原件并尝试清理 DeepSeek 文件。未发送的文件可在输入框移除，同一账号使用相同 Key 再上传时会清理超过一天的草稿。若连接中断且 DeepSeek 在本地收到文件 ID 前完成解析，文件可能保留在 DeepSeek 账户中。PDF 等格式的成功解析可能产生费用。详见 [DeepSeek 文件解析](https://api-docs.deepseek.com/zh-cn/guides/document_parsing/)。
 
+### OCR、沙箱处理与下载
+
+可以要求 MiniBot 对上传的 PDF、Word 或 PowerPoint 执行 OCR（例如「逐页识别这个扫描件，提取表格并给我 CSV 下载」）。Agent 可以把原件复制进当前对话的沙箱，把逐页 OCR 结果保存为 JSON，再用 Python 处理。JSON 保留 DeepSeek 的原始标记、坐标和每页完成状态。被截断的页会在工具结果中列出。同一份附件和识别模式的结果会缓存，并可在包含该附件的 fork 中复用。
+
+生成的下载链接显示在对话中，刷新或 fork 到包含该工具结果的位置后仍可使用。下载限 20 MiB。识别最多处理 1,000 页，限时 180 秒。停止对话会停止等待；DeepSeek 可能继续已提交的识别并对成功的页计费。详见 [DeepSeek OCR](https://api-docs.deepseek.com/zh-cn/guides/ocr/)。
+
 ### 沙箱安全
 
 - 每个对话一个容器，`CapDrop: ALL`、`no-new-privileges`、非 root 用户（uid 1000）、内存 / CPU / PID 上限；

@@ -3,6 +3,7 @@ import path from "node:path";
 import { PassThrough, type Writable } from "node:stream";
 import type Docker from "dockerode";
 import { pack } from "tar-stream";
+import { READ_WORKSPACE_FILE } from "./workspace-files";
 
 export interface ExecOptions {
   /** Working directory inside the container. Defaults to the sandbox workdir. */
@@ -85,6 +86,26 @@ export class Sandbox {
   async readFile(filePath: string): Promise<Buffer> {
     const { exitCode, stdout, stderr } = await this.run(["cat", "--", filePath]);
     if (exitCode !== 0) throw new Error(stderr.toString().trim() || `Cannot read ${filePath}`);
+    return stdout;
+  }
+
+  /** Downloads and exports use a bounded read confined to the workspace. */
+  async readWorkspaceFile(filePath: string, limit: number, signal?: AbortSignal) {
+    const prefix = `${this.workdir}/`;
+    const relative = filePath.startsWith(prefix) ? filePath.slice(prefix.length) : filePath;
+    if (
+      relative.split("/").some((part) => !part || part === "." || part === "..") ||
+      relative.includes("\0")
+    ) {
+      throw new Error("A regular file path inside the workspace is required.");
+    }
+    const { stdout, exitCode } = await this.run(
+      ["/usr/bin/python3", "-I", "-c", READ_WORKSPACE_FILE, this.workdir, relative, String(limit)],
+      { timeoutSeconds: 10, signal },
+    );
+    if (exitCode === 2)
+      throw new Error(`Workspace file exceeds the ${limit / 1024 / 1024} MiB download limit.`);
+    if (exitCode !== 0) throw new Error("A regular file path inside the workspace is required.");
     return stdout;
   }
 

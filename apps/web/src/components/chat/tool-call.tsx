@@ -1,9 +1,10 @@
 "use client";
 
-import type { WebSearchDetails } from "@minibot/agent";
+import type { WebSearchDetails, WorkspaceDownload } from "@minibot/agent";
 import type { DynamicToolUIPart } from "ai";
 import {
   ChevronRight,
+  Download,
   FileEdit,
   FilePen,
   FileText,
@@ -32,6 +33,9 @@ const TOOL_META: Record<
   edit: { icon: FileEdit, label: "Edited file", summary: (i) => i?.path ?? "" },
   ls: { icon: FolderTree, label: "Listed directory", summary: (i) => i?.path ?? "." },
   find: { icon: Search, label: "Found files", summary: (i) => i?.pattern ?? "" },
+  read_attachment: { icon: FileText, label: "Copied attachment", summary: () => "" },
+  ocr_document: { icon: TextSearch, label: "Recognized document text", summary: () => "" },
+  export_file: { icon: Download, label: "Exported file", summary: (i) => i?.path ?? "" },
   grep: { icon: TextSearch, label: "Searched files", summary: (i) => i?.pattern ?? "" },
 };
 
@@ -66,7 +70,13 @@ function SearchSources({ details }: { details: WebSearchDetails }) {
   );
 }
 
-export function ToolCall({ part }: { part: DynamicToolUIPart }) {
+export function ToolCall({
+  part,
+  conversationId,
+}: {
+  part: DynamicToolUIPart;
+  conversationId: string;
+}) {
   const [open, setOpen] = useState(false);
   const meta = TOOL_META[part.toolName] ?? {
     icon: SquareTerminal,
@@ -78,6 +88,23 @@ export function ToolCall({ part }: { part: DynamicToolUIPart }) {
   const failed = part.state === "output-error";
   const output = part.state === "output-available" ? (part.output as ToolOutput) : undefined;
   const isSearch = part.toolName === "web_search" && output?.details;
+
+  const download =
+    part.toolName === "export_file"
+      ? (output?.details as { download?: WorkspaceDownload } | undefined)?.download
+      : undefined;
+  if (download && /^[0-9a-f-]{36}$/i.test(download.id) && typeof download.filename === "string") {
+    const query = new URLSearchParams({ conversationId });
+    return (
+      <a
+        href={`/api/downloads/${download.id}?${query}`}
+        className="flex w-fit max-w-full items-center gap-2 rounded-lg border px-3 py-2 text-sm hover:bg-accent/50"
+      >
+        <Download className="size-4 shrink-0" />
+        <span className="truncate">Download {download.filename}</span>
+      </a>
+    );
+  }
 
   return (
     <Collapsible open={open} onOpenChange={setOpen} className="rounded-lg border">

@@ -100,7 +100,7 @@ function MessageActions({
 }
 
 export const ChatMessage = memo(function ChatMessage(props: ChatMessageProps) {
-  const { message, isStreaming } = props;
+  const { conversationId, message, isStreaming } = props;
 
   if (message.role === "user") {
     const text = message.parts.map((p) => (p.type === "text" ? p.text : "")).join("");
@@ -144,7 +144,7 @@ export const ChatMessage = memo(function ChatMessage(props: ChatMessageProps) {
           case "reasoning":
             return <Reasoning key={key} text={part.text} streaming={part.state === "streaming"} />;
           case "dynamic-tool":
-            return <ToolCall key={key} part={part} />;
+            return <ToolCall key={key} part={part} conversationId={conversationId} />;
           case "data-error":
             return (
               <div

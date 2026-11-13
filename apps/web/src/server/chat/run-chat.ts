@@ -1,5 +1,6 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
+import { recognizeChatAttachment, resolveChatAttachment } from "@/server/services/ocr";
 import { createMiniBotAgent, generateTitle } from "@minibot/agent";
 import { createUIMessageStream } from "ai";
 import { z } from "zod";
@@ -196,6 +197,11 @@ export async function runChat(userId: string, request: ChatRequest, signal: Abor
       ),
       getSandbox: () => sandboxManager.acquire(conversationId),
       sessionId: conversationId,
+      documents: {
+        read: (id) => resolveChatAttachment(userId, conversationId, id),
+        recognize: (id, purpose, toolSignal) =>
+          recognizeChatAttachment(userId, conversationId, apiKey, id, purpose, toolSignal),
+      },
     });
 
     let nextSeq = last.seq + 1;
@@ -217,7 +223,12 @@ export async function runChat(userId: string, request: ChatRequest, signal: Abor
           const map = createEventMapper((chunk) => writer.write(chunk));
 
           agent.subscribe(async (event) => {
-            map(event);
+            const isDownload =
+              event.type === "message_end" &&
+              event.message.role === "toolResult" &&
+              event.message.toolName === "export_file" &&
+              !event.message.isError;
+            if (!isDownload) map(event);
             if (event.type !== "message_end") return;
             const { message } = event;
             if (message.role !== "assistant" && message.role !== "toolResult") return;
@@ -226,6 +237,7 @@ export async function runChat(userId: string, request: ChatRequest, signal: Abor
                 ? ((assistantIdUsed = true), assistantMessageId)
                 : randomUUID();
             await insertMessage(conversationId, nextSeq++, message, id);
+            if (isDownload) map(event);
           });
 
           const abort = () => agent.abort();

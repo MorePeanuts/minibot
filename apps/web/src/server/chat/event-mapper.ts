@@ -76,6 +76,21 @@ export function createEventMapper(write: (chunk: MiniBotChunk) => void) {
 
       case "message_end": {
         const message = event.message;
+        if (
+          message.role === "toolResult" &&
+          message.toolName === "export_file" &&
+          !message.isError
+        ) {
+          return write({
+            type: "tool-output-available",
+            toolCallId: message.toolCallId,
+            output: {
+              text: contentToText(message.content),
+              details: message.details,
+            } satisfies ToolOutput,
+            dynamic: true,
+          });
+        }
         if (message.role !== "assistant") return;
         if (message.stopReason === "error") {
           write({
@@ -88,6 +103,13 @@ export function createEventMapper(write: (chunk: MiniBotChunk) => void) {
 
       case "tool_execution_update":
       case "tool_execution_end": {
+        // Download links become usable after the tool result has been persisted.
+        if (
+          event.type === "tool_execution_end" &&
+          event.toolName === "export_file" &&
+          !event.isError
+        )
+          return;
         const result = event.type === "tool_execution_end" ? event.result : event.partialResult;
         const text = contentToText(result?.content ?? []);
         if (event.type === "tool_execution_end" && event.isError) {

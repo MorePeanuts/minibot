@@ -8,3 +8,4 @@ export {
   type RunResult,
 } from "./sandbox";
 export { default as Docker } from "dockerode";
+export { downloadLimitBytes, workspaceDownloadPath } from "./downloads";

@@ -1,7 +1,8 @@
+import type { TranscriptContext } from "@earendil-works/pi-ai";
 import { afterEach, expect, it, vi } from "vitest";
 import { createMiniBotAgent } from "./agent";
 import { uploadDeepSeekFile } from "./deepseek-files";
-import type { FileUserMessage } from "./file-content";
+import { prepareFileContent, type FileUserMessage } from "./file-content";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -89,5 +90,40 @@ it("replays native file references on both requests of a streamed tool turn", as
   expect(agent.state.messages.at(-1)).toMatchObject({
     role: "assistant",
     content: [{ type: "text", text: "Based on the attached document." }],
+  });
+});
+
+it("keeps attachment tools' IDs on the true user turn around synthetic image turns", () => {
+  const user: FileUserMessage = {
+    role: "user",
+    timestamp: 1,
+    content: "OCR my file",
+    providerFileIds: ["provider-file"],
+    localAttachments: [{ id: "attachment-id", filename: "scan.pdf" }],
+  };
+  const prepared = prepareFileContent({ messages: [user] } as TranscriptContext);
+  const turn = prepared.context.messages[0] as FileUserMessage;
+  const imageTurn = {
+    role: "user",
+    content: [
+      { type: "text", text: "Attached image(s) from tool result:" },
+      { type: "image_url", image_url: { url: "data:image/png;base64,abc" } },
+    ],
+  };
+  const result = prepared.addToPayload({
+    messages: [imageTurn, { role: "user", content: turn.content }],
+  });
+  expect(result).toEqual({
+    messages: [
+      imageTurn,
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "OCR my file" },
+          { type: "text", text: expect.stringContaining("attachment-id") },
+          { type: "file", file_id: "provider-file" },
+        ],
+      },
+    ],
   });
 });
