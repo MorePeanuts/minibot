@@ -6,6 +6,7 @@ import { StickToBottom, useStickToBottomContext } from "use-stick-to-bottom";
 import { Button } from "@/components/ui/button";
 import type { MiniBotUIMessage } from "@/lib/chat/types";
 import { ChatMessage } from "./chat-message";
+import { useReplySpeech } from "./use-reply-speech";
 
 interface MessageListProps {
   conversationId: string;
@@ -31,6 +32,7 @@ function ScrollToBottomButton() {
 }
 
 export function MessageList({ conversationId, messages, status, onRegenerate }: MessageListProps) {
+  const speech = useReplySpeech(conversationId, messages);
   const busy = status === "submitted" || status === "streaming";
   const last = messages.at(-1);
 
@@ -49,6 +51,8 @@ export function MessageList({ conversationId, messages, status, onRegenerate }: 
             isStreaming={busy && index === messages.length - 1}
             canRegenerate={!busy && message.role === "assistant"}
             onRegenerate={() => onRegenerate(message.id)}
+            speechPhase={speech.status?.messageId === message.id ? speech.status.phase : undefined}
+            onSpeech={() => void speech.toggle(message.id)}
           />
         ))}
         {status === "submitted" && last?.role === "user" && (

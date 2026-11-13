@@ -1,6 +1,17 @@
 "use client";
 
-import { AlertCircle, Check, Copy, Download, FileText, GitBranch, RefreshCw } from "lucide-react";
+import {
+  AlertCircle,
+  Check,
+  Copy,
+  Download,
+  FileText,
+  GitBranch,
+  LoaderCircle,
+  RefreshCw,
+  Square,
+  Volume2,
+} from "lucide-react";
 import Image from "next/image";
 import { memo, useState, useTransition } from "react";
 import { Streamdown } from "streamdown";
@@ -20,6 +31,8 @@ interface ChatMessageProps {
   isStreaming: boolean;
   canRegenerate: boolean;
   onRegenerate: () => void;
+  speechPhase?: "loading" | "playing";
+  onSpeech: () => void;
 }
 
 function ActionButton({
@@ -57,6 +70,8 @@ function MessageActions({
   message,
   canRegenerate,
   onRegenerate,
+  speechPhase,
+  onSpeech,
 }: Omit<ChatMessageProps, "isStreaming">) {
   const [copied, setCopied] = useState(false);
   const [forking, startFork] = useTransition();
@@ -89,6 +104,26 @@ function MessageActions({
       <ActionButton label={copied ? "Copied" : "Copy"} onClick={copy}>
         {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
       </ActionButton>
+      {message.role === "assistant" && text.trim() && (
+        <ActionButton
+          label={
+            speechPhase === "loading"
+              ? "Cancel audio generation"
+              : speechPhase === "playing"
+                ? "Stop reading aloud"
+                : "Read aloud"
+          }
+          onClick={onSpeech}
+        >
+          {speechPhase === "loading" ? (
+            <LoaderCircle className="size-3.5 animate-spin" />
+          ) : speechPhase === "playing" ? (
+            <Square className="size-3.5" />
+          ) : (
+            <Volume2 className="size-3.5" />
+          )}
+        </ActionButton>
+      )}
       {canRegenerate && (
         <ActionButton label="Regenerate" onClick={onRegenerate}>
           <RefreshCw className="size-3.5" />

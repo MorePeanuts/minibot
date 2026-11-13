@@ -12,12 +12,20 @@ test("dictates to the editable draft and releases the microphone when stopped or
 }) => {
   await page.addInitScript(() => {
     const original = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
-    Object.assign(window, { testMicrophones: [] });
+    const testMicrophones: MediaStreamTrack[] = [];
+    const testAnalysers: AnalyserNode[] = [];
+    Object.assign(window, { testMicrophones, testAnalysers });
+    const createSource = AudioContext.prototype.createMediaStreamSource;
+    AudioContext.prototype.createMediaStreamSource = function (stream) {
+      const source = createSource.call(this, stream);
+      const analyser = this.createAnalyser();
+      source.connect(analyser);
+      testAnalysers.push(analyser);
+      return source;
+    };
     navigator.mediaDevices.getUserMedia = async (constraints) => {
       const stream = await original(constraints);
-      (window as unknown as { testMicrophones: MediaStreamTrack[] }).testMicrophones.push(
-        ...stream.getTracks(),
-      );
+      testMicrophones.push(...stream.getTracks());
       return stream;
     };
   });
@@ -73,6 +81,15 @@ test("dictates to the editable draft and releases the microphone when stopped or
         (track) => track.readyState,
       ),
     );
+  const hasSamples = () =>
+    page.evaluate(() => {
+      const { testAnalysers } = window as unknown as { testAnalysers: AnalyserNode[] };
+      const analyser = testAnalysers.at(-1);
+      if (!analyser) return false;
+      const samples = new Float32Array(analyser.fftSize);
+      analyser.getFloatTimeDomainData(samples);
+      return samples.some((sample) => sample !== 0);
+    });
   await draft.fill("Original draft");
   await record.click();
   await expect(page.getByText("Recording… Up to 120 seconds.")).toBeVisible();
@@ -83,16 +100,19 @@ test("dictates to the editable draft and releases the microphone when stopped or
 
   await record.click();
   await expect(stop).toBeVisible();
+  await expect.poll(hasSamples).toBe(true);
   await draft.fill("Edited during recording");
   await stop.click();
   await expect(page.getByText("Transcribing…")).toBeVisible();
   await expect.poll(trackStates).toEqual(["ended", "ended"]);
+  await expect.poll(() => requests).toBe(1);
   await draft.fill("Edited during transcription");
   releaseTranscript!();
   await expect(draft).toHaveValue("Edited during transcription\nSpoken words");
 
   await record.click();
   await expect(stop).toBeVisible();
+  await expect.poll(hasSamples).toBe(true);
   await draft.fill("Keep this draft");
   await stop.click();
   await expect(page.getByText("Mock transcription failed")).toBeVisible();

@@ -2,7 +2,7 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 import type { AgentMessage } from "@minibot/agent";
 import { and, asc, desc, eq, gte, isNotNull, isNull, schema, type DbExecutor } from "@minibot/db";
-import { findTurnEnd } from "@/lib/chat/ui-messages";
+import { findTurnEnd, toUIMessages } from "@/lib/chat/ui-messages";
 import { db } from "../db";
 import { sandboxManager } from "../sandbox";
 
@@ -129,6 +129,38 @@ export function listMessages(conversationId: string, tx: DbExecutor = db) {
     .from(message)
     .where(eq(message.conversationId, conversationId))
     .orderBy(asc(message.seq));
+}
+
+export async function getAssistantReplyText(
+  userId: string,
+  conversationId: string,
+  messageId: string,
+) {
+  const rows = await db
+    .select({ id: message.id, data: message.data })
+    .from(message)
+    .innerJoin(conversation, eq(message.conversationId, conversation.id))
+    .where(ownedBy(userId, conversationId))
+    .orderBy(asc(message.seq));
+  const start = rows.findIndex((row) => row.id === messageId);
+  if (start < 0 || rows[start]?.data.role !== "assistant") return null;
+
+  const previousUser = rows.findLastIndex(
+    (row, index) => index < start && row.data.role === "user",
+  );
+  const firstAssistant = rows.findIndex(
+    (row, index) => index > previousUser && row.data.role === "assistant",
+  );
+  if (start !== firstAssistant) return null;
+
+  const end = findTurnEnd(rows, messageId);
+  const [reply] = toUIMessages(rows.slice(start, end + 1));
+  return (
+    reply?.parts
+      .flatMap((part) => (part.type === "text" ? [part.text] : []))
+      .join("\n\n")
+      .trim() ?? ""
+  );
 }
 
 export async function listMessagesWithAttachments(conversationId: string) {
