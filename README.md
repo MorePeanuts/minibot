@@ -116,6 +116,12 @@ pnpm dev                        # http://localhost:3000（热更新）
 
 含图片的对话使用 DeepSeek Flash 进行视觉理解，可询问截图里的内容、界面或图表。每张图片最多 20 MiB，每次请求最多 10 张，历史图片也计入。文档仍单独计数。需要逐页文字和坐标时，可要求 Agent 执行 OCR。详见 [DeepSeek 图像理解](https://api-docs.deepseek.com/zh-cn/guides/vision/)。
 
+### 语音输入
+
+点击输入框的麦克风并允许浏览器访问，录完后点击停止。DeepSeek 返回的转写文字会追加到当前草稿，可继续编辑并手动发送。录音或转写期间可点击 **Cancel**。
+
+浏览器需要支持 Web Audio 和 AudioWorklet，并通过 HTTPS 或 localhost 访问。每次录制最多 120 秒，编码为 16 kHz 单声道 16 位 PCM WAV，约 3.66 MiB。MiniBot 将录音交给 DeepSeek 转写，应用内不保存音频。转写通过服务端配置的 DeepSeek API Key 调用。详见 [DeepSeek 语音识别](https://api-docs.deepseek.com/zh-cn/guides/asr/)。
+
 ### OCR、沙箱处理与下载
 
 可以要求 MiniBot 对上传的 PDF、Word 或 PowerPoint 执行 OCR（例如「逐页识别这个扫描件，提取表格并给我 CSV 下载」）。Agent 可以把原件复制进当前对话的沙箱，把逐页 OCR 结果保存为 JSON，再用 Python 处理。JSON 保留 DeepSeek 的原始标记、坐标和每页完成状态。被截断的页会在工具结果中列出。同一份附件和识别模式的结果会缓存，并可在包含该附件的 fork 中复用。

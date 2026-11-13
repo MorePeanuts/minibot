@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowUp, Paperclip, Square, X } from "lucide-react";
+import { ArrowUp, Mic, Paperclip, Square, X } from "lucide-react";
 import Image from "next/image";
 import { type ClipboardEvent, type FormEvent, type KeyboardEvent, useRef, useState } from "react";
 import TextareaAutosize from "react-textarea-autosize";
@@ -18,6 +18,8 @@ import {
   type AttachmentInfo,
 } from "@/lib/chat/attachments";
 import { Button } from "@/components/ui/button";
+import { voiceMaxSeconds } from "@/lib/chat/voice";
+import { useVoiceInput } from "./use-voice-input";
 
 interface ChatComposerProps {
   busy: boolean;
@@ -41,6 +43,17 @@ export function ChatComposer({
   const [richLayout, setRichLayout] = useState(false);
   const picker = useRef<HTMLInputElement>(null);
   const uploading = useRef(false);
+  const voice = useVoiceInput((transcript) => {
+    setValue((draft) =>
+      draft ? `${draft}${draft.endsWith("\n") ? "" : "\n"}${transcript}` : transcript,
+    );
+  });
+  const voiceStatus = {
+    idle: voice.error,
+    starting: "Waiting for microphone access…",
+    recording: `Recording… Up to ${voiceMaxSeconds} seconds.`,
+    transcribing: "Transcribing…",
+  }[voice.phase];
   const imageCount = attachments.filter((file) => isImageMediaType(file.mediaType)).length;
   const upload = async (files: File[], pasted = false) => {
     if (!hasApiKey || uploading.current || pending || busy || sending || !files.length) return;
@@ -126,7 +139,15 @@ export function ChatComposer({
   const submit = async (event?: FormEvent) => {
     event?.preventDefault();
     const text = value.trim();
-    if ((!text && !attachments.length) || busy || pending || uploading.current || sending) return;
+    if (
+      (!text && !attachments.length) ||
+      busy ||
+      pending ||
+      uploading.current ||
+      sending ||
+      voice.active()
+    )
+      return;
     setSending(true);
     try {
       if (await onSubmit(text, attachments)) {
@@ -209,6 +230,24 @@ export function ChatComposer({
           Processing {pending}…
         </p>
       )}
+      {voiceStatus && (
+        <div className="flex flex-wrap items-center gap-1 px-3 pt-2 text-sm text-muted-foreground">
+          <p role="status">{voiceStatus}</p>
+          {voice.phase !== "idle" && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              aria-label={
+                voice.phase === "transcribing" ? "Cancel transcription" : "Cancel recording"
+              }
+              onClick={() => voice.cancel()}
+            >
+              Cancel
+            </Button>
+          )}
+        </div>
+      )}
       <TextareaAutosize
         autoFocus
         readOnly={sending}
@@ -221,7 +260,7 @@ export function ChatComposer({
         maxRows={10}
         className="w-full resize-none bg-transparent px-3 py-2 text-base outline-none placeholder:text-muted-foreground md:text-sm"
       />
-      <div className="flex items-center gap-2 px-1">
+      <div className="flex flex-wrap items-center gap-2 px-1">
         <Button
           type="button"
           variant="ghost"
@@ -233,6 +272,28 @@ export function ChatComposer({
           onClick={() => picker.current?.click()}
         >
           <Paperclip className="size-4" />
+        </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className="rounded-full"
+          aria-label={
+            voice.phase === "recording" ? "Stop recording and transcribe" : "Record voice"
+          }
+          title={voice.phase === "recording" ? "Stop recording and transcribe" : "Record voice"}
+          disabled={
+            voice.phase === "starting" ||
+            voice.phase === "transcribing" ||
+            (voice.phase === "idle" && (busy || sending || !hasApiKey))
+          }
+          onClick={() => (voice.phase === "recording" ? voice.stop() : void voice.start())}
+        >
+          {voice.phase === "recording" ? (
+            <Square className="size-3.5 fill-current text-destructive" />
+          ) : (
+            <Mic className="size-4" />
+          )}
         </Button>
         {hasApiKey && (
           <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
@@ -261,7 +322,12 @@ export function ChatComposer({
             type="submit"
             size="icon"
             className="rounded-full"
-            disabled={(!value.trim() && !attachments.length) || Boolean(pending) || sending}
+            disabled={
+              (!value.trim() && !attachments.length) ||
+              Boolean(pending) ||
+              sending ||
+              voice.phase !== "idle"
+            }
             aria-label="Send"
           >
             <ArrowUp className="size-4" />
