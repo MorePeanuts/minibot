@@ -11,6 +11,7 @@ import {
   isNull,
   lt,
   notExists,
+  or,
   schema,
   type DbExecutor,
 } from "@minibot/db";
@@ -57,6 +58,16 @@ export async function uploadDocument(
 ) {
   const purpose = documentPurpose(file.name, rich);
   if (!purpose) throw new Error("Unsupported document.");
+  return uploadAttachment(userId, conversationId, apiKey, file, purpose);
+}
+
+export async function uploadAttachment(
+  userId: string,
+  conversationId: string,
+  apiKey: string,
+  file: File,
+  purpose: Parameters<typeof uploadDeepSeekFile>[2],
+) {
   const bytes = Buffer.from(await file.arrayBuffer());
   const providerFileId = await uploadDeepSeekFile(apiKey, file, purpose);
   try {
@@ -190,7 +201,12 @@ export async function cleanupProviderFiles(
   );
 }
 
-export async function findDownload(userId: string, conversationId: string, id: string) {
+export async function findDownload(
+  userId: string,
+  conversationId: string,
+  id: string,
+  allowDraft = false,
+) {
   const [file] = await db
     .select({
       ...publicColumns,
@@ -201,19 +217,22 @@ export async function findDownload(userId: string, conversationId: string, id: s
       and(
         eq(attachment.id, id),
         eq(attachment.userId, userId),
-        exists(
-          db
-            .select({ id: messageAttachment.attachmentId })
-            .from(messageAttachment)
-            .innerJoin(message, eq(message.id, messageAttachment.messageId))
-            .innerJoin(conversation, eq(conversation.id, message.conversationId))
-            .where(
-              and(
-                eq(messageAttachment.attachmentId, attachment.id),
-                eq(conversation.id, conversationId),
-                eq(conversation.userId, userId),
+        or(
+          allowDraft ? eq(attachment.draftConversationId, conversationId) : undefined,
+          exists(
+            db
+              .select({ id: messageAttachment.attachmentId })
+              .from(messageAttachment)
+              .innerJoin(message, eq(message.id, messageAttachment.messageId))
+              .innerJoin(conversation, eq(conversation.id, message.conversationId))
+              .where(
+                and(
+                  eq(messageAttachment.attachmentId, attachment.id),
+                  eq(conversation.id, conversationId),
+                  eq(conversation.userId, userId),
+                ),
               ),
-            ),
+          ),
         ),
       ),
     );

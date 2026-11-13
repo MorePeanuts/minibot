@@ -70,7 +70,9 @@ export function Chat({ id, initialMessages, isNew = false, hasApiKey }: ChatProp
       transport,
       generateId: () => crypto.randomUUID(),
       // Refresh server components (sidebar ordering, generated title).
-      onFinish: () => router.refresh(),
+      onFinish: ({ isError, isDisconnect }) => {
+        if (!isError && !isDisconnect) router.refresh();
+      },
       onError: (error) => toast.error(errorMessage(error)),
     });
 

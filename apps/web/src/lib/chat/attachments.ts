@@ -24,7 +24,23 @@ export const documentAccept = [...parsedExtensions, ...dataExtensions]
   .map((extension) => `.${extension}`)
   .join(",");
 export const maxDocumentSize = 20 * 1024 * 1024;
-export const maxMessageAttachments = 20;
+export const maxDocuments = 20;
+export const maxImages = 10;
+export const maxImageSize = 20 * 1024 * 1024;
+
+export const imageExtensions = {
+  "image/jpeg": "jpg",
+  "image/png": "png",
+  "image/gif": "gif",
+  "image/webp": "webp",
+} as const;
+
+export type ImageMediaType = keyof typeof imageExtensions;
+export const imageAccept = ".jpg,.jpeg,.png,.gif,.webp";
+
+export function isImageMediaType(mediaType: string): mediaType is ImageMediaType {
+  return Object.hasOwn(imageExtensions, mediaType);
+}
 
 export function documentPurpose(filename: string, richLayout: boolean) {
   const dot = filename.lastIndexOf(".");
@@ -42,6 +58,6 @@ export interface AttachmentInfo {
   mediaType: string;
 }
 
-export function attachmentUrl(id: string, conversationId: string) {
-  return `/api/attachments/${id}?conversationId=${encodeURIComponent(conversationId)}`;
+export function attachmentUrl(id: string, conversationId: string, preview = false) {
+  return `/api/attachments/${id}?conversationId=${encodeURIComponent(conversationId)}${preview ? "&preview=1" : ""}`;
 }

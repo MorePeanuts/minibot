@@ -1,7 +1,8 @@
 "use client";
 
 import { ArrowUp, Paperclip, Square, X } from "lucide-react";
-import { type FormEvent, type KeyboardEvent, useRef, useState } from "react";
+import Image from "next/image";
+import { type ClipboardEvent, type FormEvent, type KeyboardEvent, useRef, useState } from "react";
 import TextareaAutosize from "react-textarea-autosize";
 import { toast } from "sonner";
 import {
@@ -9,7 +10,11 @@ import {
   documentAccept,
   documentPurpose,
   maxDocumentSize,
-  maxMessageAttachments,
+  imageAccept,
+  isImageMediaType,
+  maxDocuments,
+  maxImages,
+  maxImageSize,
   type AttachmentInfo,
 } from "@/lib/chat/attachments";
 import { Button } from "@/components/ui/button";
@@ -35,38 +40,73 @@ export function ChatComposer({
   const [sending, setSending] = useState(false);
   const [richLayout, setRichLayout] = useState(false);
   const picker = useRef<HTMLInputElement>(null);
-
-  const upload = async (files: File[]) => {
-    if (!hasApiKey || pending || busy || sending || !files.length) return;
-    if (attachments.length + files.length > maxMessageAttachments) {
-      toast.error("Attach up to 20 documents per chat.");
-      return;
+  const uploading = useRef(false);
+  const imageCount = attachments.filter((file) => isImageMediaType(file.mediaType)).length;
+  const upload = async (files: File[], pasted = false) => {
+    if (!hasApiKey || uploading.current || pending || busy || sending || !files.length) return;
+    uploading.current = true;
+    let images = imageCount;
+    let documents = attachments.length - images;
+    try {
+      for (const file of files) {
+        const image =
+          pasted ||
+          file.type.startsWith("image/") ||
+          imageAccept.split(",").some((extension) => file.name.toLowerCase().endsWith(extension));
+        const filename = file.name || "Screenshot";
+        if (!image && !documentPurpose(filename, richLayout)) {
+          toast.error(`${filename}: choose a supported document or JPEG, PNG, GIF, or WebP image.`);
+          continue;
+        }
+        if (!file.size || file.size > (image ? maxImageSize : maxDocumentSize)) {
+          toast.error(`${filename}: choose a file between 1 byte and 20 MiB.`);
+          continue;
+        }
+        if (image ? images >= maxImages : documents >= maxDocuments) {
+          toast.error(
+            `Attach up to ${image ? `${maxImages} images` : `${maxDocuments} documents`} per chat.`,
+          );
+          continue;
+        }
+        setPending(filename);
+        try {
+          const params = new URLSearchParams({
+            conversationId,
+            filename,
+            layout: richLayout ? "rich" : "text",
+            kind: image ? "image" : "document",
+          });
+          const response = await fetch(`/api/attachments?${params}`, {
+            method: "POST",
+            body: file,
+            headers: { "Content-Type": file.type || "application/octet-stream" },
+          });
+          if (!response.ok) throw new Error((await response.json()).error);
+          const info = (await response.json()) as AttachmentInfo;
+          if (isImageMediaType(info.mediaType)) images++;
+          else documents++;
+          setAttachments((current) => [...current, info]);
+        } catch (error) {
+          toast.error(error instanceof Error ? error.message : "Could not upload attachment.");
+        }
+      }
+    } finally {
+      uploading.current = false;
+      setPending(null);
     }
-    for (const file of files) {
-      if (!documentPurpose(file.name, richLayout) || !file.size || file.size > maxDocumentSize) {
-        toast.error(`${file.name}: choose a supported document between 1 byte and 20 MiB.`);
-        continue;
-      }
-      setPending(file.name);
-      try {
-        const params = new URLSearchParams({
-          conversationId,
-          filename: file.name,
-          layout: richLayout ? "rich" : "text",
-        });
-        const response = await fetch(`/api/attachments?${params}`, {
-          method: "POST",
-          body: file,
-          headers: { "Content-Type": file.type || "application/octet-stream" },
-        });
-        if (!response.ok) throw new Error((await response.json()).error);
-        const info = (await response.json()) as AttachmentInfo;
-        setAttachments((current) => [...current, info]);
-      } catch (error) {
-        toast.error(error instanceof Error ? error.message : "Could not upload document.");
-      } finally {
-        setPending(null);
-      }
+  };
+
+  const onPaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
+    const images = Array.from(event.clipboardData.files).filter(
+      (file) => file.type.startsWith("image/") || !file.type,
+    );
+    if (!images.length) return;
+    if (!event.clipboardData.getData("text/plain")) event.preventDefault();
+    if (!hasApiKey) toast.error("Add your DeepSeek API key in Settings first.");
+    else if (busy || sending || pending || uploading.current) {
+      toast.error("Wait for the current response or upload before pasting an image.");
+    } else {
+      void upload(images, true);
     }
   };
 
@@ -77,7 +117,7 @@ export function ChatComposer({
       if (!response.ok && response.status !== 404) throw new Error();
       setAttachments((current) => current.filter((item) => item.id !== file.id));
     } catch {
-      toast.error("Could not remove document. Try again.");
+      toast.error("Could not remove attachment. Try again.");
     } finally {
       setPending(null);
     }
@@ -86,7 +126,7 @@ export function ChatComposer({
   const submit = async (event?: FormEvent) => {
     event?.preventDefault();
     const text = value.trim();
-    if ((!text && !attachments.length) || busy || pending || sending) return;
+    if ((!text && !attachments.length) || busy || pending || uploading.current || sending) return;
     setSending(true);
     try {
       if (await onSubmit(text, attachments)) {
@@ -117,7 +157,7 @@ export function ChatComposer({
         ref={picker}
         hidden
         multiple
-        accept={documentAccept}
+        accept={`${documentAccept},${imageAccept}`}
         onChange={(event) => {
           const files = Array.from(event.currentTarget.files ?? []);
           event.currentTarget.value = "";
@@ -125,12 +165,22 @@ export function ChatComposer({
         }}
       />
       {attachments.length > 0 && (
-        <ul aria-label="Attached documents" className="flex flex-wrap gap-2 px-3 pt-2">
+        <ul aria-label="Attachments" className="flex flex-wrap gap-2 px-3 pt-2">
           {attachments.map((file) => (
             <li
               key={file.id}
-              className="flex max-w-full items-center gap-1 rounded-lg border px-2 text-sm"
+              className="flex max-w-full items-center gap-1 rounded-lg border px-2 py-1 text-sm"
             >
+              {isImageMediaType(file.mediaType) && (
+                <Image
+                  src={attachmentUrl(file.id, conversationId, true)}
+                  alt={`Preview of ${file.filename}`}
+                  width={48}
+                  height={48}
+                  unoptimized
+                  className="size-12 rounded object-contain"
+                />
+              )}
               <span className="truncate" title={file.filename}>
                 {file.filename}
               </span>
@@ -149,6 +199,11 @@ export function ChatComposer({
           ))}
         </ul>
       )}
+      {imageCount > 0 && (
+        <p className="px-3 pt-2 text-xs text-muted-foreground">
+          Images use DeepSeek Flash. Up to {maxImages} images per chat, 20 MiB each.
+        </p>
+      )}
       {pending && (
         <p role="status" className="px-3 pt-2 text-sm text-muted-foreground">
           Processing {pending}…
@@ -160,6 +215,7 @@ export function ChatComposer({
         value={value}
         onChange={(e) => setValue(e.target.value)}
         onKeyDown={onKeyDown}
+        onPaste={onPaste}
         placeholder="Ask MiniBot anything…"
         minRows={1}
         maxRows={10}
@@ -171,8 +227,8 @@ export function ChatComposer({
           variant="ghost"
           size="icon"
           className="rounded-full"
-          aria-label="Attach documents"
-          title="Attach documents"
+          aria-label="Attach documents or images"
+          title="Attach documents or images"
           disabled={busy || sending || Boolean(pending) || !hasApiKey}
           onClick={() => picker.current?.click()}
         >

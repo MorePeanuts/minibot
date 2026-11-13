@@ -5,7 +5,7 @@ import { createMiniBotAgent, generateTitle } from "@minibot/agent";
 import { createUIMessageStream } from "ai";
 import { z } from "zod";
 import type { MiniBotUIMessage } from "@/lib/chat/types";
-import { maxMessageAttachments } from "@/lib/chat/attachments";
+import { isImageMediaType, maxDocuments, maxImages } from "@/lib/chat/attachments";
 import { and, eq, schema } from "@minibot/db";
 import { db } from "../db";
 import {
@@ -43,13 +43,13 @@ export const chatRequestSchema = z.discriminatedUnion("trigger", [
         text: z.string().trim().max(100_000),
         attachmentIds: z
           .array(z.uuid())
-          .max(maxMessageAttachments)
+          .max(maxDocuments + maxImages)
           .default([])
           .refine((ids) => new Set(ids).size === ids.length),
       })
       .refine(
         ({ text, attachmentIds }) => Boolean(text || attachmentIds.length),
-        "Enter a message or attach a document.",
+        "Enter a message or attach a file.",
       ),
   }),
   z.object({
@@ -76,7 +76,14 @@ const globalForRuns = globalThis as unknown as { activeChatRuns?: Set<string> };
 const activeRuns = (globalForRuns.activeChatRuns ??= new Set());
 
 function validateFiles(files: ChatAttachment[], apiKey: string) {
-  if (files.length > maxMessageAttachments) {
+  const images = files.filter((file) => isImageMediaType(file.mediaType)).length;
+  if (images > maxImages) {
+    throw new ChatError(
+      `Attach up to ${maxImages} images per chat request, including history. Start a new chat to attach more.`,
+      400,
+    );
+  }
+  if (files.length - images > maxDocuments) {
     throw new ChatError(
       "DeepSeek allows up to 20 documents per chat request, including history. Start a new chat to attach more.",
       400,

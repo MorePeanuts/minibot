@@ -1,12 +1,14 @@
 "use client";
 
-import { AlertCircle, Check, Copy, FileText, GitBranch, RefreshCw } from "lucide-react";
+import { AlertCircle, Check, Copy, Download, FileText, GitBranch, RefreshCw } from "lucide-react";
+import Image from "next/image";
 import { memo, useState, useTransition } from "react";
 import { Streamdown } from "streamdown";
 import { toast } from "sonner";
 import { forkConversationAction } from "@/actions/conversations";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { isImageMediaType } from "@/lib/chat/attachments";
 import type { MiniBotUIMessage } from "@/lib/chat/types";
 import { cn } from "@/lib/utils";
 import { Reasoning } from "./reasoning";
@@ -108,7 +110,29 @@ export const ChatMessage = memo(function ChatMessage(props: ChatMessageProps) {
       <div data-role="user" className="group flex flex-col items-end gap-1">
         {message.parts.map(
           (part, index) =>
-            part.type === "file" && (
+            part.type === "file" &&
+            (isImageMediaType(part.mediaType) ? (
+              <a
+                key={index}
+                href={part.url}
+                download
+                aria-label={`Download ${part.filename ?? "image"}`}
+                className="flex max-w-[85%] flex-col gap-2 rounded-lg border p-2 text-sm hover:bg-muted"
+              >
+                <Image
+                  src={`${part.url}&preview=1`}
+                  alt={part.filename ?? "Attached image"}
+                  width={224}
+                  height={160}
+                  unoptimized
+                  className="max-h-40 w-auto rounded object-contain"
+                />
+                <span className="flex items-center gap-2">
+                  <Download aria-hidden className="size-4 shrink-0" />
+                  <span className="truncate">{part.filename ?? "Download image"}</span>
+                </span>
+              </a>
+            ) : (
               <a
                 key={index}
                 href={part.url}
@@ -118,7 +142,7 @@ export const ChatMessage = memo(function ChatMessage(props: ChatMessageProps) {
                 <FileText aria-hidden className="size-4 shrink-0" />
                 <span className="truncate">{part.filename ?? "Download document"}</span>
               </a>
-            ),
+            )),
         )}
         {text && (
           <div className="max-w-[85%] rounded-3xl bg-muted px-4 py-2.5 whitespace-pre-wrap">

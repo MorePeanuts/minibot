@@ -110,6 +110,12 @@ pnpm dev                        # http://localhost:3000（热更新）
 
 含文档的对话自动使用 DeepSeek Flash，历史文件引用也会随请求发送。每次请求最多包含 20 份文档，DeepSeek 还限制解析后的文档总文本大小。更换 API Key 后，恢复上传时的 Key 即可继续原对话。Fork 会保留附件引用，删除最后一个引用后会移除本地原件并尝试清理 DeepSeek 文件。未发送的文件可在输入框移除，同一账号使用相同 Key 再上传时会清理超过一天的草稿。若连接中断且 DeepSeek 在本地收到文件 ID 前完成解析，文件可能保留在 DeepSeek 账户中。PDF 等格式的成功解析可能产生费用。详见 [DeepSeek 文件解析](https://api-docs.deepseek.com/zh-cn/guides/document_parsing/)。
 
+### 图片上传与截图问答
+
+点击输入框的回形针选择 JPEG、PNG、GIF 或 WebP，也可以把剪贴板里的截图直接粘贴到输入框。上传后可以预览和移除图片，发送后点击消息里的缩略图可下载原图。聊天记录和 fork 会保留图片附件。
+
+含图片的对话使用 DeepSeek Flash 进行视觉理解，可询问截图里的内容、界面或图表。每张图片最多 20 MiB，每次请求最多 10 张，历史图片也计入。文档仍单独计数。需要逐页文字和坐标时，可要求 Agent 执行 OCR。详见 [DeepSeek 图像理解](https://api-docs.deepseek.com/zh-cn/guides/vision/)。
+
 ### OCR、沙箱处理与下载
 
 可以要求 MiniBot 对上传的 PDF、Word 或 PowerPoint 执行 OCR（例如「逐页识别这个扫描件，提取表格并给我 CSV 下载」）。Agent 可以把原件复制进当前对话的沙箱，把逐页 OCR 结果保存为 JSON，再用 Python 处理。JSON 保留 DeepSeek 的原始标记、坐标和每页完成状态。被截断的页会在工具结果中列出。同一份附件和识别模式的结果会缓存，并可在包含该附件的 fork 中复用。

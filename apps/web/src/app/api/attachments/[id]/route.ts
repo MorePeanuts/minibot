@@ -6,6 +6,7 @@ import {
   deleteDraftAttachments,
   findDownload,
 } from "@/server/services/attachments";
+import { imageMediaType } from "@/server/services/image-format";
 import { getAgentSettings } from "@/server/services/settings";
 
 type AttachmentRouteContext = { params: Promise<{ id: string }> };
@@ -24,18 +25,24 @@ async function authorize(request: Request, context: AttachmentRouteContext) {
 export async function GET(request: Request, context: AttachmentRouteContext) {
   const access = await authorize(request, context);
   if (access instanceof Response) return access;
-  const file = await findDownload(access.userId, access.conversationId, access.id);
+  const preview = new URL(request.url).searchParams.get("preview") === "1";
+  const file = await findDownload(access.userId, access.conversationId, access.id, preview);
   if (!file) return Response.json({ error: "Attachment not found" }, { status: 404 });
+  const mediaType = preview ? imageMediaType(file.bytes) : null;
+  if (preview && (!mediaType || mediaType !== file.mediaType)) {
+    return Response.json({ error: "Image not found" }, { status: 404 });
+  }
   const filename = encodeURIComponent(Buffer.from(file.filename).toString("utf8")).replace(
     /['()*]/g,
     (character) => `%${character.charCodeAt(0).toString(16)}`,
   );
   return new Response(new Uint8Array(file.bytes), {
     headers: {
-      "Content-Type": "application/octet-stream",
-      "Content-Disposition": `attachment; filename*=UTF-8''${filename}`,
+      "Content-Type": mediaType ?? "application/octet-stream",
+      "Content-Disposition": `${preview ? "inline" : "attachment"}; filename*=UTF-8''${filename}`,
       "Cache-Control": "private, no-store",
       "X-Content-Type-Options": "nosniff",
+      "Content-Security-Policy": "default-src 'none'; sandbox",
     },
   });
 }
