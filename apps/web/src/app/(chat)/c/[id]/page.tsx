@@ -4,7 +4,7 @@ import { z } from "zod";
 import { Chat } from "@/components/chat/chat";
 import { ChatHeader } from "@/components/chat/chat-header";
 import { toUIMessages } from "@/lib/chat/ui-messages";
-import { getConversation, listMessages } from "@/server/services/conversations";
+import { getConversation, listMessagesWithAttachments } from "@/server/services/conversations";
 import { getPublicSettings } from "@/server/services/settings";
 import { requireUser } from "@/server/session";
 
@@ -29,7 +29,7 @@ export default async function ConversationPage({ params }: PageProps) {
   const { id } = await params;
   const { user, conversation } = await load(params);
   const [rows, settings] = await Promise.all([
-    conversation ? listMessages(id) : Promise.resolve([]),
+    conversation ? listMessagesWithAttachments(id) : Promise.resolve([]),
     getPublicSettings(user.id),
   ]);
   // A brand-new chat whose first message is still streaming has no row yet.
@@ -39,13 +39,13 @@ export default async function ConversationPage({ params }: PageProps) {
     <>
       <ChatHeader
         title={conversation?.title ?? "New chat"}
-        model={settings.model}
+        model={rows.some((row) => row.attachments?.length) ? "deepseek-flash" : settings.model}
         archived={Boolean(conversation?.archivedAt)}
       />
       <Chat
         key={id}
         id={id}
-        initialMessages={toUIMessages(rows)}
+        initialMessages={toUIMessages(rows, id)}
         hasApiKey={Boolean(settings.maskedApiKey || settings.hasServerKey)}
       />
     </>

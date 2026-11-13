@@ -7,11 +7,13 @@
  * stable anchor for fork / regenerate.
  */
 import type { AgentMessage } from "@minibot/agent";
+import { attachmentUrl, type AttachmentInfo } from "./attachments";
 import type { MiniBotUIMessage, ToolOutput } from "./types";
 
 export interface StoredMessage {
   id: string;
   data: AgentMessage;
+  attachments?: AttachmentInfo[];
 }
 
 type Part = MiniBotUIMessage["parts"][number];
@@ -24,17 +26,27 @@ export function contentToText(content: string | readonly { type: string; text?: 
     .join("");
 }
 
-export function toUIMessages(rows: StoredMessage[]): MiniBotUIMessage[] {
+export function toUIMessages(rows: StoredMessage[], conversationId?: string): MiniBotUIMessage[] {
   const result: MiniBotUIMessage[] = [];
   let current: MiniBotUIMessage | undefined;
 
-  for (const { id, data } of rows) {
+  for (const { id, data, attachments } of rows) {
     if (data.role === "user") {
       current = undefined;
       result.push({
         id,
         role: "user",
-        parts: [{ type: "text", text: contentToText(data.content) }],
+        parts: [
+          ...(conversationId
+            ? (attachments ?? []).map((file): Part => ({
+                type: "file",
+                filename: file.filename,
+                mediaType: file.mediaType,
+                url: attachmentUrl(file.id, conversationId),
+              }))
+            : []),
+          { type: "text", text: contentToText(data.content) },
+        ],
       });
       continue;
     }

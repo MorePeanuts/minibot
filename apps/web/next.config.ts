@@ -20,8 +20,8 @@ const nextConfig: NextConfig = {
     "@earendil-works/pi-coding-agent",
     "@earendil-works/pi-agent-core",
     "@earendil-works/pi-ai",
+    // Keep dockerode’s optional SSH native bindings behind Node’s runtime resolution.
     "dockerode",
-    "ssh2",
   ],
   typedRoutes: true,
   // Keep the dev badge away from the sidebar user menu.

@@ -4,11 +4,24 @@ import { createMiniBotAgent, generateTitle } from "@minibot/agent";
 import { createUIMessageStream } from "ai";
 import { z } from "zod";
 import type { MiniBotUIMessage } from "@/lib/chat/types";
+import { maxMessageAttachments } from "@/lib/chat/attachments";
+import { and, eq, schema } from "@minibot/db";
+import { db } from "../db";
+import {
+  cleanupProviderFiles,
+  deleteUnusedAttachments,
+  fileCredentialHash,
+  getDraftAttachments,
+  linkMessageAttachments,
+  listMessageAttachments,
+  lockAttachments,
+  withFileReferences,
+  type ChatAttachment,
+} from "../services/attachments";
 import { contentToText } from "@/lib/chat/ui-messages";
 import { sandboxManager } from "../sandbox";
 import {
   deleteMessagesFrom,
-  getConversation,
   getOrCreateConversation,
   insertMessage,
   listMessages,
@@ -23,7 +36,20 @@ export const chatRequestSchema = z.discriminatedUnion("trigger", [
   z.object({
     trigger: z.literal("submit-message"),
     conversationId: z.uuid(),
-    message: z.object({ id: z.uuid(), text: z.string().trim().min(1).max(100_000) }),
+    message: z
+      .object({
+        id: z.uuid(),
+        text: z.string().trim().max(100_000),
+        attachmentIds: z
+          .array(z.uuid())
+          .max(maxMessageAttachments)
+          .default([])
+          .refine((ids) => new Set(ids).size === ids.length),
+      })
+      .refine(
+        ({ text, attachmentIds }) => Boolean(text || attachmentIds.length),
+        "Enter a message or attach a document.",
+      ),
   }),
   z.object({
     trigger: z.literal("regenerate-message"),
@@ -48,36 +74,87 @@ export class ChatError extends Error {
 const globalForRuns = globalThis as unknown as { activeChatRuns?: Set<string> };
 const activeRuns = (globalForRuns.activeChatRuns ??= new Set());
 
-/** Prepares the persisted history for this request and returns the next free `seq`. */
-async function prepareHistory(userId: string, request: ChatRequest) {
-  const { conversationId } = request;
-
-  if (request.trigger === "submit-message") {
-    const conversation = await getOrCreateConversation(userId, conversationId);
-    const rows = await listMessages(conversationId);
-    const seq = (rows.at(-1)?.seq ?? -1) + 1;
-    const userMessage = {
-      role: "user" as const,
-      content: request.message.text,
-      timestamp: Date.now(),
-    };
-    await insertMessage(conversationId, seq, userMessage, request.message.id);
-    rows.push({ id: request.message.id, seq, data: userMessage });
-    return { conversation, rows };
+function validateFiles(files: ChatAttachment[], apiKey: string) {
+  if (files.length > maxMessageAttachments) {
+    throw new ChatError(
+      "DeepSeek allows up to 20 documents per chat request, including history. Start a new chat to attach more.",
+      400,
+    );
   }
+  const credentialHash = fileCredentialHash(apiKey);
+  if (files.some((file) => file.credentialHash !== credentialHash)) {
+    throw new ChatError(
+      "This chat contains files uploaded with a different DeepSeek API key. Restore that key or start a new chat.",
+      400,
+    );
+  }
+}
 
-  const conversation = await getConversation(userId, conversationId);
-  if (!conversation) throw new NotFoundError();
-  const rows = await listMessages(conversationId);
-  // Mirror useChat's regenerate(): drop the targeted assistant turn (or everything after
-  // a targeted user message) and generate again from the preceding user message.
-  let cut = request.messageId
-    ? rows.findIndex((r) => r.id === request.messageId)
-    : rows.findLastIndex((r) => r.data.role === "user") + 1;
-  if (cut === -1) throw new NotFoundError("Message");
-  if (rows[cut]?.data.role === "user") cut++;
-  if (cut < rows.length) await deleteMessagesFrom(conversationId, rows[cut]!.seq);
-  return { conversation, rows: rows.slice(0, cut) };
+async function prepareHistory(userId: string, request: ChatRequest, apiKey: string) {
+  const { conversationId } = request;
+  if (request.trigger === "submit-message") await getOrCreateConversation(userId, conversationId);
+  const result = await db.transaction(async (tx) => {
+    const [conversation] = await tx
+      .select()
+      .from(schema.conversation)
+      .where(
+        and(eq(schema.conversation.id, conversationId), eq(schema.conversation.userId, userId)),
+      )
+      .for("update");
+    if (!conversation) throw new NotFoundError();
+    const rows = await listMessages(conversationId, tx);
+    if (request.trigger === "submit-message") {
+      const { attachmentIds } = request.message;
+      const draft = await getDraftAttachments(tx, userId, conversationId, attachmentIds);
+      if (draft.length !== attachmentIds.length) throw new NotFoundError("Attachment");
+      const files = await listMessageAttachments(
+        tx,
+        rows.map((row) => row.id),
+      );
+      validateFiles([...files.values()].flat().concat(draft), apiKey);
+      const seq = (rows.at(-1)?.seq ?? -1) + 1;
+      const userMessage = {
+        role: "user" as const,
+        content: request.message.text,
+        timestamp: Date.now(),
+      };
+      await insertMessage(conversationId, seq, userMessage, request.message.id, tx);
+      await linkMessageAttachments(tx, request.message.id, attachmentIds);
+      rows.push({ id: request.message.id, seq, data: userMessage });
+      if (draft.length) files.set(request.message.id, draft);
+      return { conversation, rows, files, unused: [] };
+    }
+
+    let cut = request.messageId
+      ? rows.findIndex((row) => row.id === request.messageId)
+      : rows.findLastIndex((row) => row.data.role === "user") + 1;
+    if (cut === -1) throw new NotFoundError("Message");
+    if (rows[cut]?.data.role === "user") cut++;
+    const retained = rows.slice(0, cut);
+    if (retained.at(-1)?.data.role !== "user") throw new ChatError("Nothing to respond to.", 400);
+
+    const files = await listMessageAttachments(
+      tx,
+      retained.map((row) => row.id),
+    );
+    validateFiles([...files.values()].flat(), apiKey);
+    let unused: Awaited<ReturnType<typeof deleteUnusedAttachments>> = [];
+    if (cut < rows.length) {
+      const removed = await listMessageAttachments(
+        tx,
+        rows.slice(cut).map((row) => row.id),
+      );
+      const ids = [
+        ...new Set([...removed.values()].flatMap((entries) => entries.map((file) => file.id))),
+      ];
+      await lockAttachments(tx, ids);
+      await deleteMessagesFrom(conversationId, rows[cut]!.seq, tx);
+      unused = await deleteUnusedAttachments(tx, ids);
+    }
+    return { conversation, rows: retained, files, unused };
+  });
+  await cleanupProviderFiles(apiKey, result.unused);
+  return result;
 }
 
 /**
@@ -97,18 +174,26 @@ export async function runChat(userId: string, request: ChatRequest, signal: Abor
   activeRuns.add(conversationId);
 
   try {
-    const { conversation, rows } = await prepareHistory(userId, request);
+    const { conversation, rows, files } = await prepareHistory(userId, request, settings.apiKey);
     const last = rows.at(-1);
     if (last?.data.role !== "user") throw new ChatError("Nothing to respond to.", 400);
 
-    const userText = contentToText(last.data.content);
+    const userText =
+      contentToText(last.data.content) ||
+      files
+        .get(last.id)
+        ?.map((file) => file.filename)
+        .join(", ") ||
+      "";
     const apiKey = settings.apiKey;
     const isFirstTurn = rows.length === 1 && conversation.title === "New chat";
     const agent = createMiniBotAgent({
       apiKey,
-      modelId: settings.model,
+      modelId: files.size ? "deepseek-flash" : settings.model,
       thinkingLevel: settings.thinkingLevel,
-      history: rows.map((r) => r.data),
+      history: rows.map(({ id, data }) =>
+        data.role === "user" ? withFileReferences(data, files.get(id) ?? []) : data,
+      ),
       getSandbox: () => sandboxManager.acquire(conversationId),
       sessionId: conversationId,
     });

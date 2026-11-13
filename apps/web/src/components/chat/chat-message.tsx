@@ -1,6 +1,6 @@
 "use client";
 
-import { AlertCircle, Check, Copy, GitBranch, RefreshCw } from "lucide-react";
+import { AlertCircle, Check, Copy, FileText, GitBranch, RefreshCw } from "lucide-react";
 import { memo, useState, useTransition } from "react";
 import { Streamdown } from "streamdown";
 import { toast } from "sonner";
@@ -106,9 +106,25 @@ export const ChatMessage = memo(function ChatMessage(props: ChatMessageProps) {
     const text = message.parts.map((p) => (p.type === "text" ? p.text : "")).join("");
     return (
       <div data-role="user" className="group flex flex-col items-end gap-1">
-        <div className="max-w-[85%] rounded-3xl bg-muted px-4 py-2.5 whitespace-pre-wrap">
-          {text}
-        </div>
+        {message.parts.map(
+          (part, index) =>
+            part.type === "file" && (
+              <a
+                key={index}
+                href={part.url}
+                download
+                className="flex max-w-[85%] items-center gap-2 rounded-lg border px-3 py-2 text-sm hover:bg-muted"
+              >
+                <FileText aria-hidden className="size-4 shrink-0" />
+                <span className="truncate">{part.filename ?? "Download document"}</span>
+              </a>
+            ),
+        )}
+        {text && (
+          <div className="max-w-[85%] rounded-3xl bg-muted px-4 py-2.5 whitespace-pre-wrap">
+            {text}
+          </div>
+        )}
         <MessageActions {...props} />
       </div>
     );

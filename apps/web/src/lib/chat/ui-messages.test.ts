@@ -60,6 +60,29 @@ const rows: StoredMessage[] = [
 describe("toUIMessages", () => {
   const messages = toUIMessages(rows);
 
+  it("restores saved attachments with download links scoped to the current conversation", () => {
+    const [message] = toUIMessages(
+      [
+        {
+          id: "u1",
+          data: { role: "user", content: "Summarize this", timestamp: 0 },
+          attachments: [{ id: "file-1", filename: "Report.pdf", mediaType: "application/pdf" }],
+        },
+      ],
+      "fork-1",
+    );
+
+    expect(message?.parts).toEqual([
+      {
+        type: "file",
+        filename: "Report.pdf",
+        mediaType: "application/pdf",
+        url: "/api/attachments/file-1?conversationId=fork-1",
+      },
+      { type: "text", text: "Summarize this" },
+    ]);
+  });
+
   it("groups a multi-step agent turn into one assistant UI message", () => {
     expect(messages.map((m) => [m.role, m.id])).toEqual([
       ["user", "u1"],

@@ -1,12 +1,21 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
 import type { AgentMessage } from "@minibot/agent";
-import { and, asc, desc, eq, gte, isNotNull, isNull, schema } from "@minibot/db";
+import { and, asc, desc, eq, gte, isNotNull, isNull, schema, type DbExecutor } from "@minibot/db";
 import { findTurnEnd } from "@/lib/chat/ui-messages";
 import { db } from "../db";
 import { sandboxManager } from "../sandbox";
 
-const { conversation, message } = schema;
+import {
+  cleanupProviderFiles,
+  deleteDraftAttachments,
+  deleteUnusedAttachments,
+  listMessageAttachments,
+  lockAttachments,
+} from "./attachments";
+import { getAgentSettings } from "./settings";
+
+const { conversation, message, messageAttachment } = schema;
 
 export type Conversation = typeof conversation.$inferSelect;
 export type ConversationSummary = Pick<Conversation, "id" | "title" | "updatedAt" | "archivedAt">;
@@ -71,11 +80,30 @@ export async function setConversationArchived(userId: string, id: string, archiv
 }
 
 export async function deleteConversation(userId: string, id: string) {
-  const rows = await db
-    .delete(conversation)
-    .where(ownedBy(userId, id))
-    .returning({ id: conversation.id });
-  if (rows.length === 0) throw new NotFoundError();
+  const { apiKey } = await getAgentSettings(userId);
+  const unused = await db.transaction(async (tx) => {
+    const [row] = await tx
+      .select({ id: conversation.id })
+      .from(conversation)
+      .where(ownedBy(userId, id))
+      .for("update");
+    if (!row) throw new NotFoundError();
+    const messages = await listMessages(id, tx);
+    const files = await listMessageAttachments(
+      tx,
+      messages.map((entry) => entry.id),
+    );
+    const ids = [
+      ...new Set([...files.values()].flatMap((entries) => entries.map((entry) => entry.id))),
+    ];
+    await lockAttachments(tx, ids);
+    await tx.delete(conversation).where(ownedBy(userId, id));
+    return [
+      ...(await deleteDraftAttachments(tx, userId, id)),
+      ...(await deleteUnusedAttachments(tx, ids)),
+    ];
+  });
+  await cleanupProviderFiles(apiKey, unused);
   await sandboxManager.remove(id).catch((error) => console.error("sandbox cleanup failed", error));
 }
 
@@ -84,12 +112,32 @@ export async function touchConversation(id: string) {
   await db.update(conversation).set({ updatedAt: new Date() }).where(eq(conversation.id, id));
 }
 
-export function listMessages(conversationId: string) {
-  return db
+export async function hasUserMessage(userId: string, conversationId: string, messageId: string) {
+  const [row] = await db
+    .select({ id: message.id })
+    .from(message)
+    .innerJoin(conversation, eq(message.conversationId, conversation.id))
+    .where(
+      and(ownedBy(userId, conversationId), eq(message.id, messageId), eq(message.role, "user")),
+    );
+  return Boolean(row);
+}
+
+export function listMessages(conversationId: string, tx: DbExecutor = db) {
+  return tx
     .select({ id: message.id, seq: message.seq, data: message.data })
     .from(message)
     .where(eq(message.conversationId, conversationId))
     .orderBy(asc(message.seq));
+}
+
+export async function listMessagesWithAttachments(conversationId: string) {
+  const rows = await listMessages(conversationId);
+  const files = await listMessageAttachments(
+    db,
+    rows.map((row) => row.id),
+  );
+  return rows.map((row) => ({ ...row, attachments: files.get(row.id) }));
 }
 
 export async function insertMessage(
@@ -97,14 +145,19 @@ export async function insertMessage(
   seq: number,
   data: AgentMessage,
   id: string = randomUUID(),
+  tx: DbExecutor = db,
 ) {
-  await db.insert(message).values({ id, conversationId, seq, role: data.role, data });
+  await tx.insert(message).values({ id, conversationId, seq, role: data.role, data });
   return id;
 }
 
 /** Deletes every message with `seq >= fromSeq` (used by regenerate). */
-export async function deleteMessagesFrom(conversationId: string, fromSeq: number) {
-  await db
+export async function deleteMessagesFrom(
+  conversationId: string,
+  fromSeq: number,
+  tx: DbExecutor = db,
+) {
+  await tx
     .delete(message)
     .where(and(eq(message.conversationId, conversationId), gte(message.seq, fromSeq)));
 }
@@ -115,29 +168,44 @@ export async function deleteMessagesFrom(conversationId: string, fromSeq: number
  * The sandbox workspace is copied too, so files created so far stay available.
  */
 export async function forkConversation(userId: string, sourceId: string, uiMessageId: string) {
-  const source = await getConversation(userId, sourceId);
-  if (!source) throw new NotFoundError();
-
-  const rows = await listMessages(sourceId);
-  const end = findTurnEnd(rows, uiMessageId);
-  if (end === -1) throw new NotFoundError("Message");
-
   const forkId = randomUUID();
   await db.transaction(async (tx) => {
+    const [source] = await tx
+      .select()
+      .from(conversation)
+      .where(ownedBy(userId, sourceId))
+      .for("update");
+    if (!source) throw new NotFoundError();
+    const rows = await listMessages(sourceId, tx);
+    const end = findTurnEnd(rows, uiMessageId);
+    if (end === -1) throw new NotFoundError("Message");
+    const history = rows.slice(0, end + 1);
+    const files = await listMessageAttachments(
+      tx,
+      history.map((row) => row.id),
+    );
     await tx.insert(conversation).values({
       id: forkId,
       userId,
       title: `${source.title} (fork)`,
       forkedFromId: sourceId,
     });
-    await tx.insert(message).values(
-      rows.slice(0, end + 1).map((row) => ({
-        conversationId: forkId,
-        seq: row.seq,
-        role: row.data.role,
-        data: row.data,
+    const copies = history.map((row) => ({
+      id: randomUUID(),
+      conversationId: forkId,
+      seq: row.seq,
+      role: row.data.role,
+      data: row.data,
+    }));
+    await tx.insert(message).values(copies);
+    const references = history.flatMap((row, index) =>
+      (files.get(row.id) ?? []).map((file, position) => ({
+        messageId: copies[index]!.id,
+        attachmentId: file.id,
+        position,
       })),
     );
+    if (references.length) await tx.insert(messageAttachment).values(references);
   });
 
   await sandboxManager

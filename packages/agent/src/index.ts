@@ -13,3 +13,5 @@ export {
 export { generateTitle } from "./title";
 export { DeepSeekToolsClient, DeepSeekToolsError } from "./tools/deepseek-search";
 export type { WebSearchDetails, WebSearchSource } from "./tools/web";
+export { uploadDeepSeekFile, deleteDeepSeekFile, DeepSeekFileError } from "./deepseek-files";
+export type { FileUserMessage } from "./file-content";

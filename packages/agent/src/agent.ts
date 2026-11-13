@@ -1,4 +1,5 @@
 import { Agent, type AgentMessage } from "@earendil-works/pi-agent-core";
+import { addFileContent, type FileUserMessage } from "./file-content";
 import { models, resolveModel, resolveThinkingLevel } from "./models";
 import { buildSystemPrompt, SANDBOX_WORKDIR } from "./prompt";
 import { DeepSeekToolsClient } from "./tools/deepseek-search";
@@ -34,7 +35,20 @@ export function createMiniBotAgent(options: CreateMiniBotAgentOptions): Agent {
       ],
       messages: options.history,
     },
-    streamFn: models.streamSimple.bind(models),
+    streamFn: (model, context, streamOptions) => {
+      const hasFiles = context.messages.some(
+        (message) =>
+          message.role === "user" && (message as FileUserMessage).providerFileIds?.length,
+      );
+      if (!hasFiles) return models.streamSimple(model, context, streamOptions);
+      return models.streamSimple(model, context, {
+        ...streamOptions,
+        onPayload: async (payload, providerModel) => {
+          const original = await streamOptions?.onPayload?.(payload, providerModel);
+          return addFileContent(original ?? payload, context);
+        },
+      });
+    },
     getApiKey: () => options.apiKey,
     sessionId: options.sessionId,
     identity: { attribution: { name: "MiniBot", url: "https://github.com/minibot" } },

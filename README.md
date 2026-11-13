@@ -104,6 +104,12 @@ pnpm dev                        # http://localhost:3000（热更新）
 
 **Fork** 以 UI 消息为锚点：复制该轮及之前的所有消息行到新对话，并把沙箱 `/workspace` 一并拷贝过去。
 
+### 文档上传与问答
+
+使用输入框的回形针上传文档，等文件处理完成后发送问题。PDF、Word 和 PowerPoint 默认只解析文字，勾选 **Include document images** 可对之后上传的这些格式保留插图。也支持常见纯文本、CSV、JSON、Excel、EPUB 和 MOBI。MiniBot 每份原件最多接收 20 MiB，原件随消息保存在 PostgreSQL，可从消息下载。备份和磁盘容量需计入附件体积，反向代理需允许 20 MiB 请求体和足够的解析时间。
+
+含文档的对话自动使用 DeepSeek Flash，历史文件引用也会随请求发送。每次请求最多包含 20 份文档，DeepSeek 还限制解析后的文档总文本大小。更换 API Key 后，恢复上传时的 Key 即可继续原对话。Fork 会保留附件引用，删除最后一个引用后会移除本地原件并尝试清理 DeepSeek 文件。未发送的文件可在输入框移除，同一账号使用相同 Key 再上传时会清理超过一天的草稿。若连接中断且 DeepSeek 在本地收到文件 ID 前完成解析，文件可能保留在 DeepSeek 账户中。PDF 等格式的成功解析可能产生费用。详见 [DeepSeek 文件解析](https://api-docs.deepseek.com/zh-cn/guides/document_parsing/)。
+
 ### 沙箱安全
 
 - 每个对话一个容器，`CapDrop: ALL`、`no-new-privileges`、非 root 用户（uid 1000）、内存 / CPU / PID 上限；
