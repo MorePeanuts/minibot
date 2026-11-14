@@ -42,12 +42,11 @@ export function isImageMediaType(mediaType: string): mediaType is ImageMediaType
   return Object.hasOwn(imageExtensions, mediaType);
 }
 
-export function documentPurpose(filename: string, richLayout: boolean) {
+export function documentPurpose(filename: string) {
   const dot = filename.lastIndexOf(".");
   if (dot < 1) return null;
   const extension = filename.slice(dot + 1).toLowerCase();
-  if (parsedExtensions.includes(extension))
-    return richLayout ? "rich_layout_recognition" : "text_recognition";
+  if (parsedExtensions.includes(extension)) return "rich_layout_recognition";
   if (dataExtensions.includes(extension)) return "user_data";
   return null;
 }

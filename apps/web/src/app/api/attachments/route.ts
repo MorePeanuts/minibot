@@ -30,7 +30,6 @@ export async function POST(request: Request) {
     );
 
   const filename = searchParams.get("filename") ?? "";
-  const rich = searchParams.get("layout") === "rich";
   const imageUpload = searchParams.get("kind") === "image";
   const maxSize = imageUpload ? maxImageSize : maxDocumentSize;
   const sizeError = () =>
@@ -69,7 +68,7 @@ export async function POST(request: Request) {
     );
   }
   if (mediaType && size > maxImageSize) return sizeError();
-  const purpose = mediaType ? "user_data" : documentPurpose(filename, rich);
+  const purpose = mediaType ? "user_data" : documentPurpose(filename);
   if (!purpose) {
     return Response.json({ error: "Unsupported attachment format or filename." }, { status: 400 });
   }

@@ -53,6 +53,11 @@ it.skipIf(!process.env.ATTACHMENT_TEST_DATABASE_URL)(
         removed.push(String(input));
         return Response.json({ deleted: true });
       }
+      const form = init?.body as FormData;
+      const original = form.get("file") as File;
+      expect(form.get("purpose")).toBe(
+        original.name === "file.pdf" ? "rich_layout_recognition" : "user_data",
+      );
       return Response.json({ id: "file-api-fixture" });
     });
     vi.stubGlobal("fetch", fakeFetch);
@@ -66,8 +71,7 @@ it.skipIf(!process.env.ATTACHMENT_TEST_DATABASE_URL)(
         userId,
         source,
         "mock-key",
-        new File(["original"], "file.txt"),
-        false,
+        new File(["original"], "file.pdf", { type: "application/pdf" }),
       );
       expect(await getDraftAttachments(db, other, source, [file.id])).toEqual([]);
       expect(await getDraftAttachments(db, userId, randomUUID(), [file.id])).toEqual([]);

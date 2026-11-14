@@ -54,9 +54,8 @@ export async function uploadDocument(
   conversationId: string,
   apiKey: string,
   file: File,
-  rich: boolean,
 ) {
-  const purpose = documentPurpose(file.name, rich);
+  const purpose = documentPurpose(file.name);
   if (!purpose) throw new Error("Unsupported document.");
   return uploadAttachment(userId, conversationId, apiKey, file, purpose);
 }

@@ -40,7 +40,6 @@ export function ChatComposer({
   const [attachments, setAttachments] = useState<AttachmentInfo[]>([]);
   const [pending, setPending] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
-  const [richLayout, setRichLayout] = useState(false);
   const picker = useRef<HTMLInputElement>(null);
   const uploading = useRef(false);
   const voice = useVoiceInput((transcript) => {
@@ -67,7 +66,7 @@ export function ChatComposer({
           file.type.startsWith("image/") ||
           imageAccept.split(",").some((extension) => file.name.toLowerCase().endsWith(extension));
         const filename = file.name || "Screenshot";
-        if (!image && !documentPurpose(filename, richLayout)) {
+        if (!image && !documentPurpose(filename)) {
           toast.error(`${filename}: choose a supported document or JPEG, PNG, GIF, or WebP image.`);
           continue;
         }
@@ -86,7 +85,6 @@ export function ChatComposer({
           const params = new URLSearchParams({
             conversationId,
             filename,
-            layout: richLayout ? "rich" : "text",
             kind: image ? "image" : "document",
           });
           const response = await fetch(`/api/attachments?${params}`, {
@@ -295,17 +293,6 @@ export function ChatComposer({
             <Mic className="size-4" />
           )}
         </Button>
-        {hasApiKey && (
-          <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
-            <input
-              type="checkbox"
-              checked={richLayout}
-              onChange={(event) => setRichLayout(event.target.checked)}
-              disabled={busy || sending || Boolean(pending)}
-            />
-            Include document images
-          </label>
-        )}
         <div className="flex-1" />
         {busy ? (
           <Button
