@@ -1,5 +1,5 @@
 import { Agent, type AgentMessage } from "@earendil-works/pi-agent-core";
-import { prepareFileContent } from "./file-content";
+import { prepareFileContent, type ResponsesAttachment } from "./file-content";
 import {
   models,
   resolveModel,
@@ -22,6 +22,7 @@ export interface CreateMiniBotAgentOptions {
   history: AgentMessage[];
   getSandbox: SandboxProvider;
   documents?: DocumentAccess;
+  responsesAttachments?: ReadonlyMap<string, ResponsesAttachment>;
   /** Forwarded to the provider for prompt-cache affinity. */
   sessionId?: string;
 }
@@ -49,13 +50,15 @@ export function createMiniBotAgent(options: CreateMiniBotAgentOptions): Agent {
       messages: options.history,
     },
     streamFn: (model, context, streamOptions) => {
-      if (model.api === "openai-responses") {
-        return models.streamSimple(model, context, { ...streamOptions, ...responsesStreamOptions });
-      }
-      const files = prepareFileContent(context);
-      if (files.context === context) return models.streamSimple(model, context, streamOptions);
+      const responses = model.api === "openai-responses";
+      const settings = responses ? { ...streamOptions, ...responsesStreamOptions } : streamOptions;
+      const files = prepareFileContent(
+        context,
+        responses ? options.responsesAttachments : undefined,
+      );
+      if (files.context === context) return models.streamSimple(model, context, settings);
       return models.streamSimple(model, files.context, {
-        ...streamOptions,
+        ...settings,
         onPayload: async (payload, providerModel) => {
           const original = await streamOptions?.onPayload?.(payload, providerModel);
           return files.addToPayload(original ?? payload);

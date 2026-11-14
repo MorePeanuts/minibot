@@ -6,7 +6,7 @@ import { createUIMessageStream } from "ai";
 import { z } from "zod";
 import type { MiniBotUIMessage } from "@/lib/chat/types";
 import { isImageMediaType, maxDocuments, maxImages } from "@/lib/chat/attachments";
-import { and, eq, schema } from "@minibot/db";
+import { and, eq, schema, type DbExecutor } from "@minibot/db";
 import { db } from "../db";
 import {
   cleanupProviderFiles,
@@ -31,6 +31,7 @@ import {
   touchConversation,
 } from "../services/conversations";
 import { getAgentSettings } from "../services/settings";
+import { loadResponsesAttachments, maxResponsesAttachmentBytes } from "./responses-attachments";
 import { createEventMapper } from "./event-mapper";
 
 export const chatRequestSchema = z.discriminatedUnion("trigger", [
@@ -75,11 +76,14 @@ export class ChatError extends Error {
 const globalForRuns = globalThis as unknown as { activeChatRuns?: Set<string> };
 const activeRuns = (globalForRuns.activeChatRuns ??= new Set());
 
-const responsesAttachmentError = "Attachments are unavailable with the custom Responses provider.";
-
 function validateFiles(files: ChatAttachment[], chat: ChatModelConfig) {
   if (chat.provider === "responses") {
-    if (files.length) throw new ChatError(responsesAttachmentError, 400);
+    if (files.reduce((sum, file) => sum + file.size, 0) > maxResponsesAttachmentBytes) {
+      throw new ChatError(
+        "Responses attachments can total up to 50 MB per request, including history. Remove files or start a new chat.",
+        400,
+      );
+    }
     return;
   }
   const images = files.filter((file) => isImageMediaType(file.mediaType)).length;
@@ -92,6 +96,12 @@ function validateFiles(files: ChatAttachment[], chat: ChatModelConfig) {
   if (files.length - images > maxDocuments) {
     throw new ChatError(
       "DeepSeek allows up to 20 documents per chat request, including history. Start a new chat to attach more.",
+      400,
+    );
+  }
+  if (files.some((file) => !file.providerFileId)) {
+    throw new ChatError(
+      "This chat contains files uploaded through the Responses provider. Switch back to Responses or start a new chat and reattach the files.",
       400,
     );
   }
@@ -112,11 +122,14 @@ async function prepareHistory(
 ) {
   const { conversationId } = request;
   if (request.trigger === "submit-message") {
-    if (chat.provider === "responses" && request.message.attachmentIds.length) {
-      throw new ChatError(responsesAttachmentError, 400);
-    }
     await getOrCreateConversation(userId, conversationId);
   }
+  const prepareOriginals = (tx: DbExecutor, files: Map<string, ChatAttachment[]>) =>
+    chat.provider === "responses"
+      ? loadResponsesAttachments(tx, userId, [
+          ...new Set([...files.values()].flat().map((file) => file.id)),
+        ])
+      : undefined;
   const result = await db.transaction(async (tx) => {
     const [conversation] = await tx
       .select()
@@ -146,7 +159,13 @@ async function prepareHistory(
       await linkMessageAttachments(tx, request.message.id, attachmentIds);
       rows.push({ id: request.message.id, seq, data: userMessage });
       if (draft.length) files.set(request.message.id, draft);
-      return { conversation, rows, files, unused: [] };
+      return {
+        conversation,
+        rows,
+        files,
+        originals: await prepareOriginals(tx, files),
+        unused: [],
+      };
     }
 
     let cut = request.messageId
@@ -175,7 +194,13 @@ async function prepareHistory(
       await deleteMessagesFrom(conversationId, rows[cut]!.seq, tx);
       unused = await deleteUnusedAttachments(tx, ids);
     }
-    return { conversation, rows: retained, files, unused };
+    return {
+      conversation,
+      rows: retained,
+      files,
+      originals: await prepareOriginals(tx, files),
+      unused,
+    };
   });
   await cleanupProviderFiles(deepSeekApiKey, result.unused);
   return result;
@@ -203,7 +228,7 @@ export async function runChat(userId: string, request: ChatRequest, signal: Abor
   activeRuns.add(conversationId);
 
   try {
-    const { conversation, rows, files } = await prepareHistory(
+    const { conversation, rows, files, originals } = await prepareHistory(
       userId,
       request,
       chat,
@@ -230,10 +255,11 @@ export async function runChat(userId: string, request: ChatRequest, signal: Abor
       ),
       getSandbox: () => sandboxManager.acquire(conversationId),
       sessionId: conversationId,
-      documents: deepSeekApiKey
-        ? {
-            read: (id) => resolveChatAttachment(userId, conversationId, id),
-            recognize: (id, purpose, toolSignal) =>
+      responsesAttachments: originals,
+      documents: {
+        read: (id) => resolveChatAttachment(userId, conversationId, id),
+        recognize: deepSeekApiKey
+          ? (id, purpose, toolSignal) =>
               recognizeChatAttachment(
                 userId,
                 conversationId,
@@ -241,9 +267,9 @@ export async function runChat(userId: string, request: ChatRequest, signal: Abor
                 id,
                 purpose,
                 toolSignal,
-              ),
-          }
-        : undefined,
+              )
+          : undefined,
+      },
     });
 
     let nextSeq = last.seq + 1;

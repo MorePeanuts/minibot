@@ -26,11 +26,16 @@ const publicColumns = {
 };
 const fileColumns = {
   ...publicColumns,
+  size: attachment.size,
   providerFileId: attachment.providerFileId,
   credentialHash: attachment.credentialHash,
 };
 
-export type ChatAttachment = AttachmentInfo & { providerFileId: string; credentialHash: string };
+export type ChatAttachment = AttachmentInfo & {
+  size: number;
+  providerFileId: string | null;
+  credentialHash: string | null;
+};
 
 export function fileCredentialHash(apiKey: string) {
   return createHash("sha256").update(apiKey).digest("hex");
@@ -43,7 +48,7 @@ export function withFileReferences(
   return files.length
     ? {
         ...user,
-        providerFileIds: files.map((file) => file.providerFileId),
+        providerFileIds: files.flatMap((file) => file.providerFileId ?? []),
         localAttachments: files.map(({ id, filename }) => ({ id, filename })),
       }
     : user;
@@ -63,12 +68,13 @@ export async function uploadDocument(
 export async function uploadAttachment(
   userId: string,
   conversationId: string,
-  apiKey: string,
+  apiKey: string | null,
   file: File,
   purpose: Parameters<typeof uploadDeepSeekFile>[2],
 ) {
   const bytes = Buffer.from(await file.arrayBuffer());
-  const providerFileId = await uploadDeepSeekFile(apiKey, file, purpose);
+  const providerFileId = apiKey ? await uploadDeepSeekFile(apiKey, file, purpose) : null;
+  const credentialHash = apiKey ? fileCredentialHash(apiKey) : null;
   try {
     const [row] = await db
       .insert(attachment)
@@ -80,14 +86,12 @@ export async function uploadAttachment(
         size: file.size,
         bytes,
         providerFileId,
-        credentialHash: fileCredentialHash(apiKey),
+        credentialHash,
       })
       .returning(publicColumns);
     return row!;
   } catch (error) {
-    await cleanupProviderFiles(apiKey, [
-      { providerFileId, credentialHash: fileCredentialHash(apiKey) },
-    ]);
+    await cleanupProviderFiles(apiKey, [{ providerFileId, credentialHash }]);
     throw error;
   }
 }
@@ -166,13 +170,16 @@ export function deleteDraftAttachments(
     .returning(providerColumns);
 }
 
-export async function expireDraftAttachments(userId: string, apiKey: string) {
+export async function expireDraftAttachments(userId: string, apiKey: string | null) {
   const files = await db
     .delete(attachment)
     .where(
       and(
         eq(attachment.userId, userId),
-        eq(attachment.credentialHash, fileCredentialHash(apiKey)),
+        or(
+          isNull(attachment.credentialHash),
+          apiKey ? eq(attachment.credentialHash, fileCredentialHash(apiKey)) : undefined,
+        ),
         isNotNull(attachment.draftConversationId),
         lt(attachment.createdAt, new Date(Date.now() - 24 * 60 * 60 * 1000)),
       ),
@@ -189,7 +196,10 @@ export async function cleanupProviderFiles(
   const credentialHash = fileCredentialHash(apiKey);
   await Promise.all(
     files
-      .filter((file) => file.credentialHash === credentialHash)
+      .filter(
+        (file): file is { providerFileId: string; credentialHash: string } =>
+          file.providerFileId !== null && file.credentialHash === credentialHash,
+      )
       .map(async (file) => {
         try {
           await deleteDeepSeekFile(apiKey, file.providerFileId);

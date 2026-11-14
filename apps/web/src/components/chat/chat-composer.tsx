@@ -25,6 +25,7 @@ interface ChatComposerProps {
   busy: boolean;
   conversationId: string;
   canAttach: boolean;
+  responsesAttachments: boolean;
   canUseVoice: boolean;
   onSubmit: (text: string, attachments: AttachmentInfo[]) => Promise<boolean>;
   onStop: () => void;
@@ -34,6 +35,7 @@ export function ChatComposer({
   busy,
   conversationId,
   canAttach,
+  responsesAttachments,
   canUseVoice,
   onSubmit,
   onStop,
@@ -220,7 +222,13 @@ export function ChatComposer({
           ))}
         </ul>
       )}
-      {imageCount > 0 && (
+      {responsesAttachments && attachments.length > 0 && (
+        <p className="px-3 pt-2 text-xs text-muted-foreground">
+          Files go to your Responses provider, up to 50 MB including chat history. Use PDF when
+          embedded Office images matter.
+        </p>
+      )}
+      {!responsesAttachments && imageCount > 0 && (
         <p className="px-3 pt-2 text-xs text-muted-foreground">
           Images use DeepSeek Flash. Up to {maxImages} images per chat, 20 MiB each.
         </p>

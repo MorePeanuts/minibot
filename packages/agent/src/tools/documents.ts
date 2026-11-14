@@ -8,7 +8,7 @@ import type { SandboxProvider } from "./sandbox";
 
 export interface DocumentAccess {
   read: (id: string) => Promise<{ id: string; filename: string; bytes: Buffer }>;
-  recognize: (id: string, purpose: OcrPurpose, signal?: AbortSignal) => Promise<OcrPage[]>;
+  recognize?: (id: string, purpose: OcrPurpose, signal?: AbortSignal) => Promise<OcrPage[]>;
 }
 
 export interface WorkspaceDownload {
@@ -55,6 +55,8 @@ export function createDocumentTools(
       return textResult(`Original attachment copied to ${output}.`);
     },
   };
+  const recognizeDocument = documents.recognize;
+  if (!recognizeDocument) return [read];
   const ocrParameters = Type.Object({
     attachmentId,
     purpose: Type.Optional(
@@ -73,10 +75,7 @@ export function createDocumentTools(
     executionMode: "sequential",
     async execute(_callId, args, signal) {
       const purpose = args.purpose ?? "text_recognition";
-      const pages = await waitForOcr(
-        documents.recognize(args.attachmentId, purpose, signal),
-        signal,
-      );
+      const pages = await waitForOcr(recognizeDocument(args.attachmentId, purpose, signal), signal);
       signal?.throwIfAborted();
       const sandbox = await getSandbox();
       const output = `${sandbox.workdir}/ocr/${randomUUID()}.json`;

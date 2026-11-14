@@ -23,17 +23,14 @@ export async function POST(request: Request) {
     return Response.json({ error: "Invalid conversation" }, { status: 400 });
   const userId = session.user.id;
   const settings = await getAgentSettings(userId);
-  if (settings.chatProvider === "responses") {
-    return Response.json(
-      { error: "Attachments are unavailable with the custom Responses provider." },
-      { status: 400 },
-    );
+  if (!settings.chat) {
+    const error =
+      settings.chatProvider === "responses"
+        ? "Configure your Responses provider in Settings before attaching files."
+        : "Add your DeepSeek API key in Settings first.";
+    return Response.json({ error }, { status: 400 });
   }
-  if (!settings.apiKey)
-    return Response.json(
-      { error: "Add your DeepSeek API key in Settings first." },
-      { status: 400 },
-    );
+  const providerKey = settings.chat.provider === "deepseek" ? settings.chat.apiKey : null;
 
   const filename = searchParams.get("filename") ?? "";
   const imageUpload = searchParams.get("kind") === "image";
@@ -88,7 +85,7 @@ export async function POST(request: Request) {
     const file = new File([bytes], name, { type });
     await expireDraftAttachments(userId, settings.apiKey);
     return Response.json(
-      await uploadAttachment(userId, conversationId.data, settings.apiKey, file, purpose),
+      await uploadAttachment(userId, conversationId.data, providerKey, file, purpose),
       { status: 201 },
     );
   } catch (error) {

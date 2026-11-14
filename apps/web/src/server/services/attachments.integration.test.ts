@@ -1,8 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { createDb, eq, schema } from "@minibot/db";
+import { runChat } from "@/server/chat/run-chat";
+import type { ChatModelConfig } from "@minibot/agent";
+import { getAgentSettings } from "./settings";
 import { POST } from "@/app/api/attachments/route";
 import { GET } from "@/app/api/attachments/[id]/route";
-import { expect, it, vi } from "vitest";
+import { afterAll, expect, it, vi } from "vitest";
 import {
   findDownload,
   getDraftAttachments,
@@ -15,6 +18,7 @@ import {
   getOrCreateConversation,
   insertMessage,
   listMessagesWithAttachments,
+  listMessages,
 } from "./conversations";
 
 vi.mock("server-only", () => ({}));
@@ -37,7 +41,12 @@ vi.mock("../sandbox", () => ({
   sandboxManager: { copyWorkspace: vi.fn(async () => {}), remove: vi.fn(async () => {}) },
 }));
 vi.mock("./settings", () => ({
-  getAgentSettings: vi.fn(async () => ({ apiKey: "mock-key" })),
+  getAgentSettings: vi.fn(async () => ({
+    apiKey: "mock-key",
+    chatProvider: "deepseek",
+    chat: { provider: "deepseek", apiKey: "mock-key", modelId: "deepseek-flash" },
+    thinkingLevel: "off",
+  })),
 }));
 
 it.skipIf(!process.env.ATTACHMENT_TEST_DATABASE_URL)(
@@ -167,7 +176,167 @@ it.skipIf(!process.env.ATTACHMENT_TEST_DATABASE_URL)(
       ).toEqual([]);
     } finally {
       await db.delete(schema.user).where(eq(schema.user.id, userId));
-      await db.$client.end();
+      vi.unstubAllGlobals();
+    }
+  },
+);
+
+afterAll(async () => {
+  if (process.env.ATTACHMENT_TEST_DATABASE_URL) {
+    const { db } = await import("../db");
+    await db.$client.end();
+  }
+});
+
+it.skipIf(!process.env.ATTACHMENT_TEST_DATABASE_URL)(
+  "passes authorized old and local originals to Responses across fork and regenerate and rejects oversize history",
+  async () => {
+    const { db } = await import("../db");
+    const userId = randomUUID();
+    const foreign = randomUUID();
+    const source = randomUUID();
+    const chat = {
+      provider: "responses",
+      modelId: "relay/fixture",
+      baseUrl: "https://relay.invalid/v1",
+      apiKey: "relay-test",
+      reasoning: false,
+    } satisfies ChatModelConfig;
+    const settings = vi.mocked(getAgentSettings);
+    settings.mockResolvedValue({
+      chat,
+      apiKey: null,
+      chatProvider: "responses",
+      thinkingLevel: "off",
+    });
+    const outgoing: Record<string, unknown>[] = [];
+    const relay = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      expect(String(url)).toBe(`${chat.baseUrl}/responses`);
+      outgoing.push(JSON.parse(String(init?.body)));
+      const item = {
+        type: "message",
+        role: "assistant",
+        id: "msg_fixture",
+        status: "completed",
+        content: [{ type: "output_text", text: "I read the files.", annotations: [] }],
+      };
+      return new Response(
+        [
+          { type: "response.created", response: { id: "resp_fixture" } },
+          { type: "response.output_item.added", output_index: 0, item },
+          { type: "response.output_text.delta", output_index: 0, delta: "I read the files." },
+          { type: "response.output_item.done", output_index: 0, item },
+          {
+            type: "response.completed",
+            response: { id: "resp_fixture", status: "completed", output: [item] },
+          },
+        ]
+          .map((event) => `data: ${JSON.stringify(event)}\n\n`)
+          .join(""),
+        { headers: { "content-type": "text/event-stream" } },
+      );
+    });
+    vi.stubGlobal("fetch", relay);
+    const signal = new AbortController().signal;
+    try {
+      await db.insert(schema.user).values(
+        [userId, foreign].map((id) => ({
+          id,
+          name: "Relay Attachment Test",
+          email: `${id}@example.test`,
+        })),
+      );
+      await getOrCreateConversation(userId, source);
+      const upload = await POST(
+        new Request(
+          `http://localhost/api/attachments?conversationId=${source}&filename=local.pdf`,
+          { method: "POST", headers: { "x-test-user": userId }, body: "local original" },
+        ),
+      );
+      expect(upload.status).toBe(201);
+      const local = await upload.json();
+      expect(relay).not.toHaveBeenCalled();
+
+      const [old] = await db
+        .insert(schema.attachment)
+        .values({
+          userId,
+          filename: "old.pdf",
+          mediaType: "application/octet-stream",
+          size: 12,
+          bytes: Buffer.from("old original"),
+          providerFileId: "file-old",
+          credentialHash: "old-deepseek-credential",
+        })
+        .returning({ id: schema.attachment.id });
+      const oldTurn = await insertMessage(source, 0, {
+        role: "user",
+        content: "Read old PDF",
+        timestamp: 1,
+      });
+      await linkMessageAttachments(db, oldTurn, [old!.id]);
+
+      const submit = {
+        trigger: "submit-message" as const,
+        conversationId: source,
+        message: { id: randomUUID(), text: "Read both PDFs", attachmentIds: [local.id] },
+      };
+      await expect(runChat(foreign, submit, signal)).rejects.toThrow("Conversation not found");
+      await db
+        .update(schema.attachment)
+        .set({ size: 50_000_000 })
+        .where(eq(schema.attachment.id, local.id));
+      await expect(runChat(userId, submit, signal)).rejects.toThrow("50 MB");
+      expect(await listMessages(source)).toHaveLength(1);
+      expect(await getDraftAttachments(db, userId, source, [local.id])).toHaveLength(1);
+      expect(relay).not.toHaveBeenCalled();
+      await db
+        .update(schema.attachment)
+        .set({ size: 14 })
+        .where(eq(schema.attachment.id, local.id));
+
+      const stream = await runChat(userId, submit, signal);
+      const chunks = [];
+      for await (const chunk of stream) chunks.push(chunk);
+      expect(JSON.stringify(chunks)).toContain("I read the files.");
+      const fork = await forkConversation(userId, source, submit.message.id);
+      const regenerated = await runChat(
+        userId,
+        { trigger: "regenerate-message", conversationId: fork },
+        signal,
+      );
+      const regeneratedChunks = [];
+      for await (const chunk of regenerated) regeneratedChunks.push(chunk);
+      expect(JSON.stringify(regeneratedChunks)).toContain("I read the files.");
+      expect(outgoing).toHaveLength(2);
+      for (const payload of outgoing) {
+        const request = JSON.stringify(payload);
+        expect(request).toContain(
+          `data:application/pdf;base64,${Buffer.from("old original").toString("base64")}`,
+        );
+        expect(request).toContain(
+          `data:application/pdf;base64,${Buffer.from("local original").toString("base64")}`,
+        );
+        expect(request).toContain('"name":"read_attachment"');
+        expect(request).not.toContain('"name":"ocr_document"');
+        expect(request).not.toContain("file-old");
+      }
+      expect(JSON.stringify(await listMessages(fork))).not.toContain("base64");
+      settings.mockResolvedValue({
+        chat: { provider: "deepseek", apiKey: "mock-key", modelId: "deepseek-flash" },
+        apiKey: "mock-key",
+        chatProvider: "deepseek",
+        thinkingLevel: "off",
+      });
+      const before = await listMessages(fork);
+      await expect(
+        runChat(userId, { trigger: "regenerate-message", conversationId: fork }, signal),
+      ).rejects.toThrow("Switch back to Responses");
+      expect(await listMessages(fork)).toEqual(before);
+    } finally {
+      settings.mockReset();
+      await db.delete(schema.user).where(eq(schema.user.id, userId));
+      await db.delete(schema.user).where(eq(schema.user.id, foreign));
       vi.unstubAllGlobals();
     }
   },

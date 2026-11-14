@@ -175,7 +175,8 @@ export function Chat({
       <div className="mx-auto w-full max-w-3xl px-4 pb-4">
         <ChatComposer
           conversationId={id}
-          canAttach={provider === "deepseek" && hasDeepSeekKey}
+          canAttach={hasApiKey}
+          responsesAttachments={provider === "responses"}
           canUseVoice={hasDeepSeekKey}
           busy={busy}
           onSubmit={handleSubmit}
