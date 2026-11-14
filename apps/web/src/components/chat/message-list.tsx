@@ -12,6 +12,7 @@ interface MessageListProps {
   conversationId: string;
   messages: MiniBotUIMessage[];
   status: ChatStatus;
+  canUseVoice: boolean;
   onRegenerate: (messageId: string) => void;
 }
 
@@ -31,7 +32,13 @@ function ScrollToBottomButton() {
   );
 }
 
-export function MessageList({ conversationId, messages, status, onRegenerate }: MessageListProps) {
+export function MessageList({
+  conversationId,
+  messages,
+  status,
+  canUseVoice,
+  onRegenerate,
+}: MessageListProps) {
   const speech = useReplySpeech(conversationId, messages);
   const busy = status === "submitted" || status === "streaming";
   const last = messages.at(-1);
@@ -52,7 +59,7 @@ export function MessageList({ conversationId, messages, status, onRegenerate }: 
             canRegenerate={!busy && message.role === "assistant"}
             onRegenerate={() => onRegenerate(message.id)}
             speechPhase={speech.status?.messageId === message.id ? speech.status.phase : undefined}
-            onSpeech={() => void speech.toggle(message.id)}
+            onSpeech={canUseVoice ? () => void speech.toggle(message.id) : undefined}
           />
         ))}
         {status === "submitted" && last?.role === "user" && (

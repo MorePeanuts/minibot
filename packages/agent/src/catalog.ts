@@ -19,3 +19,6 @@ export const DEFAULT_THINKING_LEVEL: MiniBotThinkingLevel = "low";
 export function isModelId(value: string): value is ModelId {
   return SUPPORTED_MODELS.some((m) => m.id === value);
 }
+
+export const CHAT_PROVIDERS = ["deepseek", "responses"] as const;
+export type ChatProvider = (typeof CHAT_PROVIDERS)[number];

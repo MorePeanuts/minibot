@@ -32,7 +32,7 @@ interface ChatMessageProps {
   canRegenerate: boolean;
   onRegenerate: () => void;
   speechPhase?: "loading" | "playing";
-  onSpeech: () => void;
+  onSpeech?: () => void;
 }
 
 function ActionButton({
@@ -104,7 +104,7 @@ function MessageActions({
       <ActionButton label={copied ? "Copied" : "Copy"} onClick={copy}>
         {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
       </ActionButton>
-      {message.role === "assistant" && text.trim() && (
+      {message.role === "assistant" && text.trim() && onSpeech && (
         <ActionButton
           label={
             speechPhase === "loading"

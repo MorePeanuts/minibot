@@ -1,7 +1,7 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
 import { recognizeChatAttachment, resolveChatAttachment } from "@/server/services/ocr";
-import { createMiniBotAgent, generateTitle } from "@minibot/agent";
+import { createMiniBotAgent, generateTitle, type ChatModelConfig } from "@minibot/agent";
 import { createUIMessageStream } from "ai";
 import { z } from "zod";
 import type { MiniBotUIMessage } from "@/lib/chat/types";
@@ -75,7 +75,13 @@ export class ChatError extends Error {
 const globalForRuns = globalThis as unknown as { activeChatRuns?: Set<string> };
 const activeRuns = (globalForRuns.activeChatRuns ??= new Set());
 
-function validateFiles(files: ChatAttachment[], apiKey: string) {
+const responsesAttachmentError = "Attachments are unavailable with the custom Responses provider.";
+
+function validateFiles(files: ChatAttachment[], chat: ChatModelConfig) {
+  if (chat.provider === "responses") {
+    if (files.length) throw new ChatError(responsesAttachmentError, 400);
+    return;
+  }
   const images = files.filter((file) => isImageMediaType(file.mediaType)).length;
   if (images > maxImages) {
     throw new ChatError(
@@ -89,7 +95,7 @@ function validateFiles(files: ChatAttachment[], apiKey: string) {
       400,
     );
   }
-  const credentialHash = fileCredentialHash(apiKey);
+  const credentialHash = fileCredentialHash(chat.apiKey);
   if (files.some((file) => file.credentialHash !== credentialHash)) {
     throw new ChatError(
       "This chat contains files uploaded with a different DeepSeek API key. Restore that key or start a new chat.",
@@ -98,9 +104,19 @@ function validateFiles(files: ChatAttachment[], apiKey: string) {
   }
 }
 
-async function prepareHistory(userId: string, request: ChatRequest, apiKey: string) {
+async function prepareHistory(
+  userId: string,
+  request: ChatRequest,
+  chat: ChatModelConfig,
+  deepSeekApiKey: string | null,
+) {
   const { conversationId } = request;
-  if (request.trigger === "submit-message") await getOrCreateConversation(userId, conversationId);
+  if (request.trigger === "submit-message") {
+    if (chat.provider === "responses" && request.message.attachmentIds.length) {
+      throw new ChatError(responsesAttachmentError, 400);
+    }
+    await getOrCreateConversation(userId, conversationId);
+  }
   const result = await db.transaction(async (tx) => {
     const [conversation] = await tx
       .select()
@@ -119,7 +135,7 @@ async function prepareHistory(userId: string, request: ChatRequest, apiKey: stri
         tx,
         rows.map((row) => row.id),
       );
-      validateFiles([...files.values()].flat().concat(draft), apiKey);
+      validateFiles([...files.values()].flat().concat(draft), chat);
       const seq = (rows.at(-1)?.seq ?? -1) + 1;
       const userMessage = {
         role: "user" as const,
@@ -145,7 +161,7 @@ async function prepareHistory(userId: string, request: ChatRequest, apiKey: stri
       tx,
       retained.map((row) => row.id),
     );
-    validateFiles([...files.values()].flat(), apiKey);
+    validateFiles([...files.values()].flat(), chat);
     let unused: Awaited<ReturnType<typeof deleteUnusedAttachments>> = [];
     if (cut < rows.length) {
       const removed = await listMessageAttachments(
@@ -161,7 +177,7 @@ async function prepareHistory(userId: string, request: ChatRequest, apiKey: stri
     }
     return { conversation, rows: retained, files, unused };
   });
-  await cleanupProviderFiles(apiKey, result.unused);
+  await cleanupProviderFiles(deepSeekApiKey, result.unused);
   return result;
 }
 
@@ -172,8 +188,13 @@ async function prepareHistory(userId: string, request: ChatRequest, apiKey: stri
  */
 export async function runChat(userId: string, request: ChatRequest, signal: AbortSignal) {
   const settings = await getAgentSettings(userId);
-  if (!settings.apiKey) {
-    throw new ChatError("Add your DeepSeek API key in Settings to start chatting.", 400);
+  const { chat, apiKey: deepSeekApiKey } = settings;
+  if (!chat) {
+    const message =
+      settings.chatProvider === "responses"
+        ? "Configure your Responses base URL, model ID, and API key in Settings to start chatting."
+        : "Add your DeepSeek API key in Settings to start chatting.";
+    throw new ChatError(message, 400);
   }
   const { conversationId } = request;
   if (activeRuns.has(conversationId)) {
@@ -182,7 +203,12 @@ export async function runChat(userId: string, request: ChatRequest, signal: Abor
   activeRuns.add(conversationId);
 
   try {
-    const { conversation, rows, files } = await prepareHistory(userId, request, settings.apiKey);
+    const { conversation, rows, files } = await prepareHistory(
+      userId,
+      request,
+      chat,
+      deepSeekApiKey,
+    );
     const last = rows.at(-1);
     if (last?.data.role !== "user") throw new ChatError("Nothing to respond to.", 400);
 
@@ -193,22 +219,31 @@ export async function runChat(userId: string, request: ChatRequest, signal: Abor
         ?.map((file) => file.filename)
         .join(", ") ||
       "";
-    const apiKey = settings.apiKey;
     const isFirstTurn = rows.length === 1 && conversation.title === "New chat";
     const agent = createMiniBotAgent({
-      apiKey,
-      modelId: files.size ? "deepseek-flash" : settings.model,
+      chat:
+        chat.provider === "deepseek" && files.size ? { ...chat, modelId: "deepseek-flash" } : chat,
+      deepSeekApiKey,
       thinkingLevel: settings.thinkingLevel,
       history: rows.map(({ id, data }) =>
         data.role === "user" ? withFileReferences(data, files.get(id) ?? []) : data,
       ),
       getSandbox: () => sandboxManager.acquire(conversationId),
       sessionId: conversationId,
-      documents: {
-        read: (id) => resolveChatAttachment(userId, conversationId, id),
-        recognize: (id, purpose, toolSignal) =>
-          recognizeChatAttachment(userId, conversationId, apiKey, id, purpose, toolSignal),
-      },
+      documents: deepSeekApiKey
+        ? {
+            read: (id) => resolveChatAttachment(userId, conversationId, id),
+            recognize: (id, purpose, toolSignal) =>
+              recognizeChatAttachment(
+                userId,
+                conversationId,
+                deepSeekApiKey,
+                id,
+                purpose,
+                toolSignal,
+              ),
+          }
+        : undefined,
     });
 
     let nextSeq = last.seq + 1;
@@ -221,7 +256,7 @@ export async function runChat(userId: string, request: ChatRequest, signal: Abor
       execute: async ({ writer }) => {
         try {
           const titleTask = isFirstTurn
-            ? generateTitle(apiKey, userText)
+            ? generateTitle(chat, userText)
                 .then((title) => renameConversation(userId, conversationId, title))
                 .catch((error) => console.error("title generation failed", error))
             : undefined;

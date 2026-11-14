@@ -24,7 +24,8 @@ import { useVoiceInput } from "./use-voice-input";
 interface ChatComposerProps {
   busy: boolean;
   conversationId: string;
-  hasApiKey: boolean;
+  canAttach: boolean;
+  canUseVoice: boolean;
   onSubmit: (text: string, attachments: AttachmentInfo[]) => Promise<boolean>;
   onStop: () => void;
 }
@@ -32,7 +33,8 @@ interface ChatComposerProps {
 export function ChatComposer({
   busy,
   conversationId,
-  hasApiKey,
+  canAttach,
+  canUseVoice,
   onSubmit,
   onStop,
 }: ChatComposerProps) {
@@ -55,7 +57,7 @@ export function ChatComposer({
   }[voice.phase];
   const imageCount = attachments.filter((file) => isImageMediaType(file.mediaType)).length;
   const upload = async (files: File[], pasted = false) => {
-    if (!hasApiKey || uploading.current || pending || busy || sending || !files.length) return;
+    if (!canAttach || uploading.current || pending || busy || sending || !files.length) return;
     uploading.current = true;
     let images = imageCount;
     let documents = attachments.length - images;
@@ -113,7 +115,7 @@ export function ChatComposer({
     );
     if (!images.length) return;
     if (!event.clipboardData.getData("text/plain")) event.preventDefault();
-    if (!hasApiKey) toast.error("Add your DeepSeek API key in Settings first.");
+    if (!canAttach) toast.error("Attachments are unavailable with your current settings.");
     else if (busy || sending || pending || uploading.current) {
       toast.error("Wait for the current response or upload before pasting an image.");
     } else {
@@ -266,7 +268,7 @@ export function ChatComposer({
           className="rounded-full"
           aria-label="Attach documents or images"
           title="Attach documents or images"
-          disabled={busy || sending || Boolean(pending) || !hasApiKey}
+          disabled={busy || sending || Boolean(pending) || !canAttach}
           onClick={() => picker.current?.click()}
         >
           <Paperclip className="size-4" />
@@ -283,7 +285,7 @@ export function ChatComposer({
           disabled={
             voice.phase === "starting" ||
             voice.phase === "transcribing" ||
-            (voice.phase === "idle" && (busy || sending || !hasApiKey))
+            (voice.phase === "idle" && (busy || sending || !canUseVoice))
           }
           onClick={() => (voice.phase === "recording" ? voice.stop() : void voice.start())}
         >

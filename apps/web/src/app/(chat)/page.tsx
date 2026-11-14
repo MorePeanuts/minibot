@@ -12,13 +12,23 @@ export default async function NewChatPage() {
 
   return (
     <>
-      <ChatHeader title="New chat" model={settings.model} />
+      <ChatHeader
+        provider={settings.chatProvider}
+        title="New chat"
+        model={
+          settings.chatProvider === "responses"
+            ? (settings.responsesModel ?? "Custom Responses")
+            : settings.model
+        }
+      />
       <Chat
         key={id}
         id={id}
         initialMessages={[]}
         isNew
-        hasApiKey={Boolean(settings.maskedApiKey || settings.hasServerKey)}
+        hasApiKey={settings.hasChatCredentials}
+        hasDeepSeekKey={settings.hasDeepSeekCredentials}
+        provider={settings.chatProvider}
       />
     </>
   );

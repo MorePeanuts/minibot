@@ -3,7 +3,9 @@
 import {
   SUPPORTED_MODELS,
   THINKING_LEVELS,
+  type ChatProvider,
   type MiniBotThinkingLevel,
+  type ModelId,
 } from "@minibot/agent/catalog";
 import { ArchiveRestore, KeyRound, Trash2 } from "lucide-react";
 import Link from "next/link";
@@ -45,6 +47,11 @@ const THINKING_LABELS: Record<MiniBotThinkingLevel, string> = {
 
 function GeneralSettings({ settings }: { settings: PublicSettings }) {
   const [apiKey, setApiKey] = useState("");
+  const [provider, setProvider] = useState(settings.chatProvider);
+  const [baseUrl, setBaseUrl] = useState(settings.responsesBaseUrl ?? "");
+  const [modelId, setModelId] = useState(settings.responsesModel ?? "");
+  const [responsesKey, setResponsesKey] = useState("");
+  const [reasoning, setReasoning] = useState(settings.responsesReasoning);
   const [pending, startTransition] = useTransition();
 
   const save = (input: SettingsInput, message: string) =>
@@ -52,8 +59,10 @@ function GeneralSettings({ settings }: { settings: PublicSettings }) {
       const result = await updateSettingsAction(input);
       if (result.ok) {
         toast.success(message);
-        setApiKey("");
+        if (input.apiKey !== undefined) setApiKey("");
+        if (input.responsesApiKey !== undefined) setResponsesKey("");
       } else {
+        if (input.chatProvider === "deepseek") setProvider(settings.chatProvider);
         toast.error(result.error);
       }
     });
@@ -61,9 +70,112 @@ function GeneralSettings({ settings }: { settings: PublicSettings }) {
   return (
     <div className="flex flex-col gap-6">
       <div className="flex flex-col gap-2">
+        <Label htmlFor="chat-provider">Chat provider</Label>
+        <Select
+          value={provider}
+          onValueChange={(value) => {
+            const selected = value as ChatProvider;
+            setProvider(selected);
+            if (selected === "deepseek" && settings.chatProvider !== selected) {
+              save({ chatProvider: selected }, "Chat provider updated");
+            }
+          }}
+          disabled={pending}
+        >
+          <SelectTrigger id="chat-provider" className="w-full">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="deepseek">DeepSeek</SelectItem>
+            <SelectItem value="responses">Custom Responses API</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+
+      {provider === "responses" && (
+        <form
+          className="flex flex-col gap-3"
+          onSubmit={(e) => {
+            e.preventDefault();
+            save(
+              {
+                chatProvider: "responses",
+                responsesBaseUrl: baseUrl,
+                responsesModel: modelId,
+                responsesReasoning: reasoning,
+                ...(responsesKey.trim() && { responsesApiKey: responsesKey }),
+              },
+              "Responses settings saved",
+            );
+          }}
+        >
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="responses-base-url">Base URL</Label>
+            <Input
+              id="responses-base-url"
+              type="url"
+              placeholder="https://api.openai.com/v1"
+              value={baseUrl}
+              onChange={(e) => setBaseUrl(e.target.value)}
+              required
+            />
+          </div>
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="responses-model">Model ID</Label>
+            <Input
+              id="responses-model"
+              placeholder="Model ID from your provider"
+              value={modelId}
+              onChange={(e) => setModelId(e.target.value)}
+              required
+            />
+          </div>
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="responses-api-key">Responses API key</Label>
+            <Input
+              id="responses-api-key"
+              type="password"
+              autoComplete="off"
+              placeholder={settings.maskedResponsesApiKey ?? "API key from your provider"}
+              value={responsesKey}
+              onChange={(e) => setResponsesKey(e.target.value)}
+              required={!settings.maskedResponsesApiKey}
+            />
+            {settings.maskedResponsesApiKey && (
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <KeyRound className="size-3.5" />
+                Current key: <code>{settings.maskedResponsesApiKey}</code>
+                <Button
+                  type="button"
+                  variant="link"
+                  size="sm"
+                  className="h-auto p-0 text-destructive"
+                  disabled={pending}
+                  onClick={() => save({ responsesApiKey: null }, "Responses API key removed")}
+                >
+                  Remove
+                </Button>
+              </div>
+            )}
+          </div>
+          <Label className="gap-2 font-normal">
+            <input
+              type="checkbox"
+              checked={reasoning}
+              onChange={(e) => setReasoning(e.target.checked)}
+            />
+            Send reasoning settings to this model
+          </Label>
+          <Button type="submit" className="self-start" disabled={pending}>
+            Save Responses settings
+          </Button>
+        </form>
+      )}
+
+      <div className="flex flex-col gap-2">
         <Label htmlFor="api-key">DeepSeek API key</Label>
         <p className="text-sm text-muted-foreground">
-          Used for chat and web search. Stored encrypted (AES-256-GCM). Get one at{" "}
+          Used for DeepSeek chat, web search, OCR, and voice. Get one at{" "}
           <Link
             href="https://platform.deepseek.com/api_keys"
             target="_blank"
@@ -115,45 +227,56 @@ function GeneralSettings({ settings }: { settings: PublicSettings }) {
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2">
-        <div className="flex flex-col gap-2">
-          <Label>Model</Label>
-          <Select
-            defaultValue={settings.model}
-            onValueChange={(model) => save({ model }, "Model updated")}
-          >
-            <SelectTrigger className="w-full">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {SUPPORTED_MODELS.map((m) => (
-                <SelectItem key={m.id} value={m.id}>
-                  {m.label}
-                  <span className="text-xs text-muted-foreground">{m.description}</span>
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-        <div className="flex flex-col gap-2">
-          <Label>Thinking</Label>
-          <Select
-            defaultValue={settings.thinkingLevel}
-            onValueChange={(level) =>
-              save({ thinkingLevel: level as MiniBotThinkingLevel }, "Thinking level updated")
-            }
-          >
-            <SelectTrigger className="w-full">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {THINKING_LEVELS.map((level) => (
-                <SelectItem key={level} value={level}>
-                  {THINKING_LABELS[level]}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
+        {provider === "deepseek" && (
+          <div className="flex flex-col gap-2">
+            <Label>Model</Label>
+            <Select
+              defaultValue={settings.model}
+              onValueChange={(model) => save({ model: model as ModelId }, "Model updated")}
+            >
+              <SelectTrigger className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {SUPPORTED_MODELS.map((m) => (
+                  <SelectItem key={m.id} value={m.id}>
+                    {m.label}
+                    <span className="text-xs text-muted-foreground">{m.description}</span>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        )}
+        {(provider === "deepseek" ||
+          (settings.chatProvider === "responses" && settings.responsesReasoning && reasoning)) && (
+          <div className="flex flex-col gap-2">
+            <Label>Thinking</Label>
+            <Select
+              defaultValue={
+                provider === "responses" && settings.thinkingLevel === "max"
+                  ? "high"
+                  : settings.thinkingLevel
+              }
+              onValueChange={(level) =>
+                save({ thinkingLevel: level as MiniBotThinkingLevel }, "Thinking level updated")
+              }
+            >
+              <SelectTrigger className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {THINKING_LEVELS.filter((level) => provider === "deepseek" || level !== "max").map(
+                  (level) => (
+                    <SelectItem key={level} value={level}>
+                      {THINKING_LABELS[level]}
+                    </SelectItem>
+                  ),
+                )}
+              </SelectContent>
+            </Select>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -221,7 +344,7 @@ export function SettingsDialog({ open, onOpenChange, settings }: SettingsDialogP
   const [tab, setTab] = useState("general");
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-xl">
+      <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-xl">
         <DialogHeader>
           <DialogTitle>Settings</DialogTitle>
           <DialogDescription>Configure your model provider and manage chats.</DialogDescription>

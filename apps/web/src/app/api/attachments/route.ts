@@ -23,6 +23,12 @@ export async function POST(request: Request) {
     return Response.json({ error: "Invalid conversation" }, { status: 400 });
   const userId = session.user.id;
   const settings = await getAgentSettings(userId);
+  if (settings.chatProvider === "responses") {
+    return Response.json(
+      { error: "Attachments are unavailable with the custom Responses provider." },
+      { status: 400 },
+    );
+  }
   if (!settings.apiKey)
     return Response.json(
       { error: "Add your DeepSeek API key in Settings first." },

@@ -2,9 +2,11 @@ import "server-only";
 import {
   DEFAULT_MODEL_ID,
   DEFAULT_THINKING_LEVEL,
+  type ChatProvider,
   type MiniBotThinkingLevel,
   type ModelId,
 } from "@minibot/agent/catalog";
+import type { ChatModelConfig } from "@minibot/agent";
 import { eq, schema } from "@minibot/db";
 import { env } from "@/env";
 import { decryptSecret, encryptSecret, maskSecret } from "../crypto";
@@ -13,6 +15,13 @@ import { db } from "../db";
 const { userSettings } = schema;
 
 export interface PublicSettings {
+  chatProvider: ChatProvider;
+  responsesBaseUrl: string | null;
+  responsesModel: string | null;
+  maskedResponsesApiKey: string | null;
+  responsesReasoning: boolean;
+  hasChatCredentials: boolean;
+  hasDeepSeekCredentials: boolean;
   model: ModelId;
   thinkingLevel: MiniBotThinkingLevel;
   /** Masked user key, e.g. "sk-ab…wxyz"; null when not configured. */
@@ -22,6 +31,11 @@ export interface PublicSettings {
 }
 
 export interface SettingsUpdate {
+  chatProvider?: ChatProvider;
+  responsesBaseUrl?: string;
+  responsesModel?: string;
+  responsesApiKey?: string | null;
+  responsesReasoning?: boolean;
   /** `null` removes the stored key, `undefined` leaves it unchanged. */
   apiKey?: string | null;
   model?: ModelId;
@@ -35,7 +49,21 @@ async function getRow(userId: string) {
 
 export async function getPublicSettings(userId: string): Promise<PublicSettings> {
   const row = await getRow(userId);
+  const chatProvider = row?.chatProvider ?? "deepseek";
+  const hasDeepSeekCredentials = Boolean(row?.encryptedApiKey || env.DEEPSEEK_API_KEY);
   return {
+    chatProvider,
+    responsesBaseUrl: row?.responsesBaseUrl ?? null,
+    responsesModel: row?.responsesModel ?? null,
+    maskedResponsesApiKey: row?.encryptedResponsesApiKey
+      ? maskSecret(decryptSecret(row.encryptedResponsesApiKey))
+      : null,
+    responsesReasoning: row?.responsesReasoning ?? false,
+    hasDeepSeekCredentials,
+    hasChatCredentials:
+      chatProvider === "responses"
+        ? Boolean(row?.encryptedResponsesApiKey && row.responsesBaseUrl && row.responsesModel)
+        : hasDeepSeekCredentials,
     model: (row?.model as ModelId | undefined) ?? DEFAULT_MODEL_ID,
     thinkingLevel:
       (row?.thinkingLevel as MiniBotThinkingLevel | undefined) ?? DEFAULT_THINKING_LEVEL,
@@ -44,25 +72,50 @@ export async function getPublicSettings(userId: string): Promise<PublicSettings>
   };
 }
 
-/** Everything the agent needs to run for this user; `apiKey` is null when none is available. */
+/** DeepSeek services retain their own credentials regardless of the selected chat provider. */
 export async function getAgentSettings(userId: string) {
   const row = await getRow(userId);
-  const apiKey = row?.encryptedApiKey ? decryptSecret(row.encryptedApiKey) : env.DEEPSEEK_API_KEY;
+  const apiKey =
+    (row?.encryptedApiKey ? decryptSecret(row.encryptedApiKey) : env.DEEPSEEK_API_KEY) ?? null;
+  const chatProvider = row?.chatProvider ?? "deepseek";
+  let chat: ChatModelConfig | null = null;
+  if (chatProvider === "deepseek" && apiKey) {
+    chat = { provider: "deepseek", modelId: row?.model ?? DEFAULT_MODEL_ID, apiKey };
+  }
+  if (
+    chatProvider === "responses" &&
+    row?.responsesBaseUrl &&
+    row.responsesModel &&
+    row.encryptedResponsesApiKey
+  ) {
+    chat = {
+      provider: "responses",
+      modelId: row.responsesModel,
+      baseUrl: row.responsesBaseUrl,
+      apiKey: decryptSecret(row.encryptedResponsesApiKey),
+      reasoning: row.responsesReasoning,
+    };
+  }
   return {
-    apiKey: apiKey ?? null,
-    model: row?.model ?? DEFAULT_MODEL_ID,
+    apiKey,
+    chatProvider,
+    chat,
     thinkingLevel: row?.thinkingLevel ?? DEFAULT_THINKING_LEVEL,
   };
 }
 
 export async function updateSettings(userId: string, update: SettingsUpdate) {
+  const { apiKey, responsesApiKey, ...preferences } = update;
   const values = {
-    ...(update.model && { model: update.model }),
-    ...(update.thinkingLevel && { thinkingLevel: update.thinkingLevel }),
-    ...(update.apiKey !== undefined && {
-      encryptedApiKey: update.apiKey ? encryptSecret(update.apiKey) : null,
+    ...preferences,
+    ...(apiKey !== undefined && {
+      encryptedApiKey: apiKey ? encryptSecret(apiKey) : null,
+    }),
+    ...(responsesApiKey !== undefined && {
+      encryptedResponsesApiKey: responsesApiKey ? encryptSecret(responsesApiKey) : null,
     }),
   };
+  if (!Object.keys(values).length) return;
   await db
     .insert(userSettings)
     .values({ userId, ...values })

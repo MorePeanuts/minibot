@@ -1,10 +1,23 @@
 import { contentText } from "@earendil-works/pi-ai";
-import { DEFAULT_MODEL_ID, models, resolveModel } from "./models";
+import {
+  DEFAULT_MODEL_ID,
+  models,
+  resolveModel,
+  responsesStreamOptions,
+  type ChatModelConfig,
+} from "./models";
 
-/** Asks the (cheap) default model for a short conversation title. */
-export async function generateTitle(apiKey: string, firstUserMessage: string): Promise<string> {
+/** Asks the selected provider for a short conversation title. */
+export async function generateTitle(
+  chat: ChatModelConfig,
+  firstUserMessage: string,
+): Promise<string> {
   const response = await models.completeSimple(
-    resolveModel(DEFAULT_MODEL_ID),
+    resolveModel(
+      chat.provider === "deepseek"
+        ? { ...chat, modelId: DEFAULT_MODEL_ID }
+        : { ...chat, reasoning: false },
+    ),
     {
       systemPrompt:
         "You name chat conversations. Summarize the TOPIC of the user's message below as a " +
@@ -18,7 +31,11 @@ export async function generateTitle(apiKey: string, firstUserMessage: string): P
         },
       ],
     },
-    { apiKey, maxTokens: 50 },
+    {
+      apiKey: chat.apiKey,
+      maxTokens: 50,
+      ...(chat.provider === "responses" && responsesStreamOptions),
+    },
   );
   if (response.stopReason === "error")
     throw new Error(response.errorMessage ?? "Title generation failed");

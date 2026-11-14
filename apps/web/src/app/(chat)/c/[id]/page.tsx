@@ -38,15 +38,24 @@ export default async function ConversationPage({ params }: PageProps) {
   return (
     <>
       <ChatHeader
+        provider={settings.chatProvider}
         title={conversation?.title ?? "New chat"}
-        model={rows.some((row) => row.attachments?.length) ? "deepseek-flash" : settings.model}
+        model={
+          settings.chatProvider === "responses"
+            ? (settings.responsesModel ?? "Custom Responses")
+            : rows.some((row) => row.attachments?.length)
+              ? "deepseek-flash"
+              : settings.model
+        }
         archived={Boolean(conversation?.archivedAt)}
       />
       <Chat
         key={id}
         id={id}
         initialMessages={toUIMessages(rows, id)}
-        hasApiKey={Boolean(settings.maskedApiKey || settings.hasServerKey)}
+        hasApiKey={settings.hasChatCredentials}
+        hasDeepSeekKey={settings.hasDeepSeekCredentials}
+        provider={settings.chatProvider}
       />
     </>
   );

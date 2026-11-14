@@ -68,8 +68,8 @@ it("replays native file references on both requests of a streamed tool turn", as
     timestamp: Date.now(),
   };
   const agent = createMiniBotAgent({
-    apiKey: "mock",
-    modelId: "deepseek-flash",
+    chat: { provider: "deepseek", apiKey: "mock", modelId: "deepseek-flash" },
+    deepSeekApiKey: "mock",
     thinkingLevel: "off",
     history: [{ role: "user", content: "An earlier turn", timestamp: 1 }, user],
     getSandbox: () => Promise.reject(new Error("No sandbox expected")),

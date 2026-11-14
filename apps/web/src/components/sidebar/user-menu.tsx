@@ -31,9 +31,7 @@ interface UserMenuProps {
 export function UserMenu({ user, settings }: UserMenuProps) {
   const router = useRouter();
   const { theme, setTheme } = useTheme();
-  const [settingsOpen, setSettingsOpen] = useState(
-    !settings.maskedApiKey && !settings.hasServerKey,
-  );
+  const [settingsOpen, setSettingsOpen] = useState(!settings.hasChatCredentials);
   const initials = user.name.slice(0, 2).toUpperCase();
 
   return (

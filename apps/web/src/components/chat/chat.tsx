@@ -1,5 +1,6 @@
 "use client";
 
+import type { ChatProvider } from "@minibot/agent/catalog";
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
 import { useRouter } from "next/navigation";
@@ -17,6 +18,8 @@ interface ChatProps {
   /** True for a not-yet-persisted chat at "/". */
   isNew?: boolean;
   hasApiKey: boolean;
+  hasDeepSeekKey: boolean;
+  provider: ChatProvider;
 }
 
 function textOf(message: MiniBotUIMessage) {
@@ -32,7 +35,14 @@ function errorMessage(error: Error) {
   }
 }
 
-export function Chat({ id, initialMessages, isNew = false, hasApiKey }: ChatProps) {
+export function Chat({
+  id,
+  initialMessages,
+  isNew = false,
+  hasApiKey,
+  hasDeepSeekKey,
+  provider,
+}: ChatProps) {
   const router = useRouter();
 
   const retryTurn = useRef<string | null>(null);
@@ -80,7 +90,11 @@ export function Chat({ id, initialMessages, isNew = false, hasApiKey }: ChatProp
 
   const handleSubmit = async (text: string, attachments: AttachmentInfo[] = []) => {
     if (!hasApiKey) {
-      toast.error("Add your DeepSeek API key in Settings first.");
+      toast.error(
+        provider === "responses"
+          ? "Configure your Responses provider in Settings first."
+          : "Add your DeepSeek API key in Settings first.",
+      );
       return false;
     }
     if (isNew && messages.length === 0) {
@@ -154,13 +168,15 @@ export function Chat({ id, initialMessages, isNew = false, hasApiKey }: ChatProp
           conversationId={id}
           messages={messages}
           status={status}
+          canUseVoice={hasDeepSeekKey}
           onRegenerate={(messageId) => void regenerate({ messageId })}
         />
       )}
       <div className="mx-auto w-full max-w-3xl px-4 pb-4">
         <ChatComposer
           conversationId={id}
-          hasApiKey={hasApiKey}
+          canAttach={provider === "deepseek" && hasDeepSeekKey}
+          canUseVoice={hasDeepSeekKey}
           busy={busy}
           onSubmit={handleSubmit}
           onStop={() => void stop()}

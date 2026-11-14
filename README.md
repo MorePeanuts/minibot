@@ -2,18 +2,18 @@
 
 一个用现代 TypeScript 全栈技术构建的 LLM Agent 产品：类 ChatGPT 的对话界面、联网搜索、在隔离 Docker 沙箱里执行 `bash / ls / grep / find / read / write / edit`，支持注册登录、API Key 配置、新建 / 重命名 / 归档 / 删除对话、**从任意消息 fork 出新对话**、重新生成、停止生成等功能。
 
-| 能力       | 实现                                                                             |
-| ---------- | -------------------------------------------------------------------------------- |
-| 模型       | DeepSeek `deepseek-flash`（默认）/ `deepseek-v4-pro`，可调思考强度               |
-| 智能体编排 | [pi-agent](https://github.com/earendil-works/pi)（`pi-agent-core` + `pi-ai`）    |
-| 联网       | DeepSeek Search / Fetch API（`web_search`、`web_fetch` 工具）                    |
-| 代码执行   | 每个对话一个独立 Docker 容器，复用 `pi-coding-agent` 的工具实现，仅替换 I/O 后端 |
-| 前端       | Next.js 16 App Router + React 19 + Tailwind v4 + shadcn/ui + AI SDK `useChat`    |
-| 后端       | Next.js Route Handlers + Server Actions                                          |
-| 认证       | Better Auth（邮箱 + 密码，会话 Cookie）                                          |
-| 数据库     | PostgreSQL 18 + Drizzle ORM（类型安全 SQL + 迁移）                               |
-| 部署       | Docker Compose（Postgres、迁移任务、Docker API 代理、沙箱镜像、Web）             |
-| 工程化     | pnpm workspace + Turborepo、ESLint、Prettier、Vitest、Playwright、Husky、CI      |
+| 能力       | 实现                                                                                             |
+| ---------- | ------------------------------------------------------------------------------------------------ |
+| 模型       | DeepSeek `deepseek-flash`（默认）/ `deepseek-v4-pro`，可调思考强度，也可连接自定义 Responses API |
+| 智能体编排 | [pi-agent](https://github.com/earendil-works/pi)（`pi-agent-core` + `pi-ai`）                    |
+| 联网       | DeepSeek Search / Fetch API（`web_search`、`web_fetch` 工具）                                    |
+| 代码执行   | 每个对话一个独立 Docker 容器，复用 `pi-coding-agent` 的工具实现，仅替换 I/O 后端                 |
+| 前端       | Next.js 16 App Router + React 19 + Tailwind v4 + shadcn/ui + AI SDK `useChat`                    |
+| 后端       | Next.js Route Handlers + Server Actions                                                          |
+| 认证       | Better Auth（邮箱 + 密码，会话 Cookie）                                                          |
+| 数据库     | PostgreSQL 18 + Drizzle ORM（类型安全 SQL + 迁移）                                               |
+| 部署       | Docker Compose（Postgres、迁移任务、Docker API 代理、沙箱镜像、Web）                             |
+| 工程化     | pnpm workspace + Turborepo、ESLint、Prettier、Vitest、Playwright、Husky、CI                      |
 
 ---
 
@@ -31,7 +31,12 @@ docker compose up -d --build
 open http://localhost:3000
 ```
 
-注册账号后在左下角菜单 **Settings** 中填入 DeepSeek API Key（也可在 `.env` 中设置 `DEEPSEEK_API_KEY` 作为全站默认 Key）。
+注册账号后，打开左下角菜单的 **Settings**，选择 **DeepSeek** 或 **Custom Responses API** 作为聊天供应商。
+
+- **DeepSeek**：填写 DeepSeek API Key，也可在 `.env` 中设置 `DEEPSEEK_API_KEY` 作为站点默认 Key。
+- **Custom Responses API**：填写供应商的 Base URL（例如 `https://api.openai.com/v1`）、模型 ID 和 API Key，然后点击 **Save Responses settings**。聊天和标题生成会向该地址的 `/responses` 发送请求。供应商需支持流式响应及 MiniBot 工具调用。如模型支持 `reasoning.effort`，可开启对应选项。
+
+两个 API Key 分开加密存储。使用自定义供应商聊天无需 DeepSeek Key。联网搜索、网页抓取、OCR、语音输入和朗读仍使用独立配置的 DeepSeek Key。部署时请限制注册，仅允许受信任的用户配置服务端要访问的地址。
 
 ### 方式二：本地开发
 

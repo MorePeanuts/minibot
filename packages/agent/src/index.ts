@@ -10,6 +10,7 @@ export {
   type MiniBotThinkingLevel,
   type ModelId,
 } from "./models";
+export type { ChatModelConfig } from "./models";
 export { generateTitle } from "./title";
 export { DeepSeekToolsClient, DeepSeekToolsError } from "./tools/deepseek-search";
 export type { WebSearchDetails, WebSearchSource } from "./tools/web";

@@ -1,6 +1,12 @@
 import { Agent, type AgentMessage } from "@earendil-works/pi-agent-core";
 import { prepareFileContent } from "./file-content";
-import { models, resolveModel, resolveThinkingLevel } from "./models";
+import {
+  models,
+  resolveModel,
+  resolveThinkingLevel,
+  responsesStreamOptions,
+  type ChatModelConfig,
+} from "./models";
 import { buildSystemPrompt, SANDBOX_WORKDIR } from "./prompt";
 import { createDocumentTools, createExportFileTool, type DocumentAccess } from "./tools/documents";
 import { DeepSeekToolsClient } from "./tools/deepseek-search";
@@ -8,9 +14,9 @@ import { createSandboxTools, type SandboxProvider } from "./tools/sandbox";
 import { createWebFetchTool, createWebSearchTool } from "./tools/web";
 
 export interface CreateMiniBotAgentOptions {
-  /** The user's DeepSeek API key (used for both chat and Search/Fetch). */
-  apiKey: string;
-  modelId: string;
+  chat: ChatModelConfig;
+  /** Independent key for DeepSeek web tools. */
+  deepSeekApiKey?: string | null;
   thinkingLevel: string;
   /** Prior conversation (user / assistant / toolResult messages). */
   history: AgentMessage[];
@@ -22,17 +28,20 @@ export interface CreateMiniBotAgentOptions {
 
 /** Assembles a ready-to-run pi Agent with MiniBot's model, prompt and tools. */
 export function createMiniBotAgent(options: CreateMiniBotAgentOptions): Agent {
-  const model = resolveModel(options.modelId);
-  const deepseekTools = new DeepSeekToolsClient(options.apiKey);
+  const model = resolveModel(options.chat);
+  const deepseekTools = options.deepSeekApiKey
+    ? new DeepSeekToolsClient(options.deepSeekApiKey)
+    : undefined;
 
   return new Agent({
     initialState: {
-      systemPrompt: buildSystemPrompt(),
+      systemPrompt: buildSystemPrompt(new Date(), Boolean(deepseekTools)),
       model,
       thinkingLevel: resolveThinkingLevel(model, options.thinkingLevel),
       tools: [
-        createWebSearchTool(deepseekTools),
-        createWebFetchTool(deepseekTools),
+        ...(deepseekTools
+          ? [createWebSearchTool(deepseekTools), createWebFetchTool(deepseekTools)]
+          : []),
         ...createSandboxTools(SANDBOX_WORKDIR, options.getSandbox),
         ...(options.documents ? createDocumentTools(options.getSandbox, options.documents) : []),
         createExportFileTool(options.getSandbox),
@@ -40,6 +49,9 @@ export function createMiniBotAgent(options: CreateMiniBotAgentOptions): Agent {
       messages: options.history,
     },
     streamFn: (model, context, streamOptions) => {
+      if (model.api === "openai-responses") {
+        return models.streamSimple(model, context, { ...streamOptions, ...responsesStreamOptions });
+      }
       const files = prepareFileContent(context);
       if (files.context === context) return models.streamSimple(model, context, streamOptions);
       return models.streamSimple(model, files.context, {
@@ -50,7 +62,7 @@ export function createMiniBotAgent(options: CreateMiniBotAgentOptions): Agent {
         },
       });
     },
-    getApiKey: () => options.apiKey,
+    getApiKey: () => options.chat.apiKey,
     sessionId: options.sessionId,
     identity: { attribution: { name: "MiniBot", url: "https://github.com/minibot" } },
   });
