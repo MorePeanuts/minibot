@@ -64,16 +64,28 @@ test("dictates to the editable draft and releases the microphone when stopped or
   await page.getByLabel("Password").fill("password123");
   await page.getByRole("button", { name: "Sign up" }).click();
   await expect(page.getByText("How can I help you today?")).toBeVisible();
+  const record = page.getByRole("button", { name: "Record voice" });
   const settings = page.getByRole("dialog", { name: "Settings" });
+  const sidebar = page.getByRole("dialog", { name: "Sidebar" });
+  if (!(await settings.isVisible()) && (await record.isDisabled())) {
+    await page.getByRole("button", { name: "Toggle Sidebar" }).click();
+    // Opening the sheet mounts the account menu, which opens Settings for a new user.
+    await expect(settings).toBeVisible();
+  }
   if (await settings.isVisible()) {
     await settings.getByLabel("DeepSeek API key").fill("sk-voice-e2e-mock-key");
-    await settings.getByRole("button", { name: "Save" }).click();
-    await expect(page.getByText("API key saved")).toBeVisible();
+    await settings.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(settings.getByText("sk-vo…-key", { exact: true })).toBeVisible();
     await page.keyboard.press("Escape");
+    await expect(settings).toBeHidden();
+  }
+  if (await sidebar.isVisible()) {
+    await page.keyboard.press("Escape");
+    await expect(sidebar).toBeHidden();
   }
 
   const draft = page.getByPlaceholder("Ask MiniBot anything…");
-  const record = page.getByRole("button", { name: "Record voice" });
+  await expect(record).toBeEnabled();
   const stop = page.getByRole("button", { name: "Stop recording and transcribe" });
   const trackStates = () =>
     page.evaluate(() =>
